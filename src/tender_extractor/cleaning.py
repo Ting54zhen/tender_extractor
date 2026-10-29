@@ -86,7 +86,14 @@ def is_placeholder(value: Any) -> bool:
     return False
 
 
-def _to_decimal(value: Any) -> Decimal | None:
+def parse_decimal(value: Any) -> Decimal | None:
+    """把任意值转成 Decimal；None、空串、非法输入统一返回 None。
+
+    千分位逗号在这里去掉。全项目只有这一个「字符串 → Decimal」入口，
+    不要在别处再写 `Decimal(str(x).replace(",", ""))`。
+    """
+    if value is None or isinstance(value, Decimal):
+        return value
     try:
         return Decimal(str(value).replace(",", "").strip())
     except (InvalidOperation, ValueError):
@@ -149,7 +156,7 @@ def parse_money(value: Any, require_unit: bool = False) -> Decimal | None:
         unit = match.group("unit")
         if require_unit and not unit:
             continue
-        number = _to_decimal(match.group("num"))
+        number = parse_decimal(match.group("num"))
         if number is None:
             continue
         if unit in {"亿", "亿元"}:
@@ -167,7 +174,7 @@ def money_quantum(precision: int = 2) -> Decimal:
 
 def quantize_money(value: Any, precision: int = 2) -> Decimal | None:
     """按指定小数位做四舍五入（ROUND_HALF_UP）。"""
-    number = value if isinstance(value, Decimal) else _to_decimal(value)
+    number = parse_decimal(value)
     if number is None:
         return None
     return number.quantize(money_quantum(precision), rounding=ROUND_HALF_UP)
@@ -182,7 +189,7 @@ def format_money(value: Any, suffix: str = "元", precision: int = 2) -> str | N
 
 
 def format_wan(value: Any) -> str | None:
-    number = value if isinstance(value, Decimal) else _to_decimal(value)
+    number = parse_decimal(value)
     if number is None:
         return None
     return f"{number / Decimal(10_000):,.2f}万元"
@@ -193,12 +200,12 @@ def parse_number(value: Any) -> Decimal | None:
     if value is None:
         return None
     if isinstance(value, (int, float, Decimal)):
-        return Decimal(str(value))
+        return parse_decimal(value)
     text = unicodedata.normalize("NFKC", str(value))
     match = re.search(r"-?\d+(?:\.\d+)?", text.replace(",", ""))
     if not match:
         return None
-    return _to_decimal(match.group(0))
+    return parse_decimal(match.group(0))
 
 
 def parse_integer(value: Any) -> int | None:

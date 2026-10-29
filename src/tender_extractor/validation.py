@@ -21,23 +21,13 @@ from .cleaning import (
     normalize_enum,
     normalize_for_match,
     normalize_phone,
+    parse_decimal,
     parse_integer,
     parse_money,
     parse_number,
     parse_percent,
 )
 from .models import Document, FieldValue
-
-
-def _as_decimal(value: Any) -> Decimal | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, Decimal):
-        return value
-    try:
-        return Decimal(str(value).replace(",", ""))
-    except Exception:
-        return None
 
 
 def _field_precision(field_def: dict[str, Any] | None, default: int = 2) -> int:
@@ -262,10 +252,10 @@ def cross_validate(
 
     items = structured.get("procurement_items") or []
     item_total = sum(
-        (_as_decimal(item.get("total_amount")) or Decimal(0) for item in items),
+        (parse_decimal(item.get("total_amount")) or Decimal(0) for item in items),
         Decimal(0),
     )
-    declared = _as_decimal(structured.get("procurement_total_declared"))
+    declared = parse_decimal(structured.get("procurement_total_declared"))
 
     if budget and items and item_total > 0 and abs(item_total - budget) > budget_tolerance:
         message = (
@@ -278,9 +268,9 @@ def cross_validate(
 
     for item in items:
         for sub in item.get("sub_items", []):
-            qty = _as_decimal(sub.get("quantity"))
-            price = _as_decimal(sub.get("unit_price"))
-            amount = _as_decimal(sub.get("amount"))
+            qty = parse_decimal(sub.get("quantity"))
+            price = parse_decimal(sub.get("unit_price"))
+            amount = parse_decimal(sub.get("amount"))
             if qty is not None and price is not None and amount is not None:
                 if abs(qty * price - amount) > Decimal("0.01"):
                     warnings.append(
@@ -293,8 +283,8 @@ def cross_validate(
                     break
 
     payment = structured.get("payment") or {}
-    prepay = _as_decimal(payment.get("prepay_amount"))
-    balance = _as_decimal(payment.get("balance_amount"))
+    prepay = parse_decimal(payment.get("prepay_amount"))
+    balance = parse_decimal(payment.get("balance_amount"))
     if prepay is not None and balance is not None and budget is not None:
         if prepay + balance > 0 and abs(prepay + balance - budget) > budget_tolerance:
             warnings.append(

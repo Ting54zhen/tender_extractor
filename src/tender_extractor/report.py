@@ -6,9 +6,10 @@
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any, Iterable
 
+from .cleaning import parse_decimal
 from .models import ExtractionResult
 
 STATUS_CN = {
@@ -135,13 +136,10 @@ def _money_sum(items: list[dict[str, Any]]) -> str | None:
     found = False
     for item in items:
         for key in ("total_amount", "amount"):
-            value = item.get(key)
-            if value in (None, ""):
+            value = parse_decimal(item.get(key))
+            if value is None:
                 continue
-            try:
-                total += Decimal(str(value))
-            except (InvalidOperation, ValueError):
-                continue
+            total += value
             found = True
             break
     return f"{total:,.2f}" if found else None
