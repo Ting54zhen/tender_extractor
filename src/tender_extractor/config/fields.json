@@ -1,0 +1,493 @@
+{
+  "version": "1.2.0",
+  "description": "需求报告 -> 标准招标模板关键字段。template 字段与《标准模版.docx》中的 {占位符} 一一对应；template 为 null 的字段供平台内部使用。",
+  "groups": {
+    "basic": {
+      "label": "项目基本信息",
+      "fields": [
+        "project_name", "project_number", "procurement_plan_number",
+        "procurement_method", "tender_org_form", "budget_amount", "purchaser",
+        "supervision_unit", "purchaser_address", "purchaser_contact",
+        "purchaser_contact_person", "agency",
+        "agency_address", "agency_contact", "agency_project_contact",
+        "agency_project_phone", "procurement_item", "procurement_target",
+        "industry", "contract_period", "consortium_allowed",
+        "subcontracting_allowed", "price_method", "project_summary"
+      ]
+    },
+    "commercial": {
+      "label": "商务与政策",
+      "fields": [
+        "candidate_count", "winner_count", "valid_supplier_count",
+        "agency_fee", "sme_policy", "inquiry_contact",
+        "inquiry_phone", "inquiry_address"
+      ]
+    },
+    "scoring": {
+      "label": "评审办法",
+      "fields": [
+        "business_score", "tech_score", "credit_score", "price_score",
+        "tech_review_item_1", "tech_review_score_1", "tech_review_content_1",
+        "business_review_item_1", "business_review_score_1", "business_review_content_1"
+      ]
+    },
+    "contract": {
+      "label": "合同条款",
+      "fields": [
+        "contract_scope", "contract_party_a_rights", "contract_party_b_rights",
+        "contract_prepay_ratio", "contract_settlement", "contract_ip",
+        "contract_confidentiality", "contract_copies"
+      ]
+    }
+  },
+  "fields": [
+    {
+      "key": "project_name",
+      "label": "项目名称",
+      "template": "项目名称",
+      "type": "text",
+      "required": true,
+      "aliases": ["项目名称", "采购项目名称", "项目全称"],
+      "sections": ["项目概况", "封面"],
+      "description": "采购项目的完整名称，通常出现在项目概况或封面。",
+      "examples": ["2025年社区管理与服务专业教学资源库委托服务项目"]
+    },
+    {
+      "key": "project_number",
+      "label": "采购项目编号",
+      "template": "采购项目编号",
+      "type": "text",
+      "required": false,
+      "aliases": ["项目编号", "采购项目编号", "招标编号"],
+      "sections": ["项目概况"],
+      "description": "采购项目编号。需求报告留空时应返回空值，不得编造。",
+      "examples": ["GZCS-2025-001"]
+    },
+    {
+      "key": "procurement_plan_number",
+      "label": "采购计划编号",
+      "template": "采购计划编号",
+      "type": "text",
+      "required": false,
+      "aliases": ["采购计划编号", "计划编号", "采购计划文号"],
+      "sections": ["项目概况"],
+      "description": "政府采购计划编号，需求报告通常不包含。"
+    },
+    {
+      "key": "procurement_method",
+      "label": "采购方式",
+      "template": "采购方式",
+      "type": "enum",
+      "required": true,
+      "aliases": ["采购方式", "招标方式"],
+      "sections": ["项目概况"],
+      "enum": ["公开招标", "邀请招标", "竞争性磋商", "竞争性谈判", "询价", "单一来源采购", "框架协议采购"],
+      "description": "项目采用的采购方式。",
+      "examples": ["公开招标"]
+    },
+    {
+      "key": "tender_org_form",
+      "label": "招标组织形式",
+      "template": null,
+      "type": "enum",
+      "required": false,
+      "aliases": ["招标组织形式", "组织形式"],
+      "enum": ["自主招标", "委托招标"],
+      "description": "招标组织形式。平台对应 SELF / ENTRUSTED，原文未明确时返回空值。"
+    },
+    {
+      "key": "budget_amount",
+      "label": "预算金额",
+      "template": "预算金额",
+      "type": "money",
+      "precision": 4,
+      "required": true,
+      "aliases": ["采购预算", "预算金额", "项目预算", "最高限价", "投入经费"],
+      "sections": ["项目概况", "采购内容"],
+      "description": "采购预算金额。抽取时保留原文写法（如 136.68万元、1,366,800.00元）；平台统一输出为带千分位的“元”，保留 4 位小数，例如 1,366,800.0000元。",
+      "examples": ["136.68万元", "1,366,800.00元"]
+    },
+    {
+      "key": "purchaser",
+      "label": "采购人",
+      "template": "采购人",
+      "type": "text",
+      "required": true,
+      "aliases": ["采购人", "采购单位", "招标人", "采购人名称"],
+      "sections": ["项目概况", "封面"],
+      "description": "采购人单位全称。可从报告标题“XXX采购需求报告”或交付地点推断，推断值需标记。",
+      "examples": ["广州城市职业学院"]
+    },
+    {
+      "key": "supervision_unit",
+      "label": "监督单位",
+      "template": null,
+      "type": "text",
+      "required": false,
+      "aliases": ["监督单位", "监督部门"],
+      "sections": ["项目概况"],
+      "description": "采购项目监督单位。平台新建项目表单必填，需求报告未写时返回空值，不得编造。"
+    },
+    {
+      "key": "purchaser_address",
+      "label": "采购人地址",
+      "template": "采购人地址",
+      "type": "text",
+      "required": false,
+      "aliases": ["采购人地址", "采购单位地址", "地址"],
+      "sections": ["项目概况", "交付"]
+    },
+    {
+      "key": "purchaser_contact",
+      "label": "采购人联系方式",
+      "template": "采购人联系方式",
+      "type": "phone",
+      "required": false,
+      "aliases": ["采购人联系方式", "采购人联系电话", "采购单位联系方式", "采购单位联系电话", "联系电话"],
+      "sections": ["项目概况"],
+      "description": "采购人联系电话。平台对应 contact_phone，只保留电话号码，不带姓名和职务。"
+    },
+    {
+      "key": "purchaser_contact_person",
+      "label": "采购人联系人",
+      "template": null,
+      "type": "text",
+      "required": false,
+      "aliases": ["采购人联系人", "采购单位联系人", "采购人项目联系人"],
+      "sections": ["项目概况"],
+      "description": "采购人联系人姓名。平台对应 contact_person，与联系电话分开输出。"
+    },
+    {
+      "key": "agency",
+      "label": "采购代理机构",
+      "template": "采购代理机构",
+      "type": "text",
+      "required": false,
+      "aliases": ["采购代理机构", "代理机构", "招标代理机构"],
+      "sections": ["项目概况"]
+    },
+    {
+      "key": "agency_address",
+      "label": "采购代理机构地址",
+      "template": "采购代理机构地址",
+      "type": "text",
+      "required": false,
+      "aliases": ["采购代理机构地址", "代理机构地址"]
+    },
+    {
+      "key": "agency_contact",
+      "label": "采购代理机构联系方式",
+      "template": "采购代理机构联系方式",
+      "type": "text",
+      "required": false,
+      "aliases": ["采购代理机构联系方式", "代理机构联系方式"]
+    },
+    {
+      "key": "agency_project_contact",
+      "label": "采购代理机构项目联系人",
+      "template": "采购代理机构项目联系人",
+      "type": "text",
+      "required": false,
+      "aliases": ["项目联系人", "代理机构项目联系人"]
+    },
+    {
+      "key": "agency_project_phone",
+      "label": "采购代理机构项目联系方式",
+      "template": "采购代理机构项目联系方式",
+      "type": "text",
+      "required": false,
+      "aliases": ["项目联系电话", "项目联系方式"]
+    },
+    {
+      "key": "procurement_item",
+      "label": "采购品目",
+      "template": "采购品目",
+      "type": "text",
+      "required": false,
+      "aliases": ["采购品目", "品目名称", "品目"],
+      "description": "政府采购品目分类名称。需求报告未明确时返回空值。"
+    },
+    {
+      "key": "procurement_target",
+      "label": "采购标的",
+      "template": "采购标的",
+      "type": "text",
+      "required": true,
+      "aliases": ["采购标的", "采购内容", "服务名称", "标的名称"],
+      "sections": ["项目概况", "采购标的"],
+      "examples": ["2025年社区管理与服务专业教学资源库委托服务"]
+    },
+    {
+      "key": "industry",
+      "label": "所属行业",
+      "template": "所属行业",
+      "type": "text",
+      "required": false,
+      "aliases": ["所属行业", "行业"],
+      "description": "中小企业划型所使用的行业，例如“其他未列明行业”。"
+    },
+    {
+      "key": "contract_period",
+      "label": "合同履行期限",
+      "template": "合同履行期限",
+      "type": "text",
+      "required": true,
+      "aliases": ["合同履行期限", "服务期限", "服务期间", "项目完成期限", "标的提供的时间"],
+      "sections": ["项目概况", "采购内容", "商务要求"],
+      "examples": ["自合同签订之日起至2025年12月31日止"]
+    },
+    {
+      "key": "consortium_allowed",
+      "label": "是否接受联合体",
+      "template": "是否接受联合体",
+      "type": "enum",
+      "required": false,
+      "aliases": ["联合体", "联合体投标"],
+      "enum": ["接受", "不接受"],
+      "description": "是否接受联合体投标。原文未明确时返回空值，不得默认。"
+    },
+    {
+      "key": "subcontracting_allowed",
+      "label": "是否允许分包",
+      "template": "是否允许分包",
+      "type": "enum",
+      "required": false,
+      "aliases": ["分包", "合同分包"],
+      "enum": ["允许", "不允许"],
+      "description": "是否允许合同分包。注意区分“中小企业预留份额的分包安排”和“合同分包条款”。"
+    },
+    {
+      "key": "price_method",
+      "label": "报价方式",
+      "template": "报价方式",
+      "type": "text",
+      "required": false,
+      "aliases": ["报价方式", "报价形式"],
+      "examples": ["总价", "单价", "下浮率"]
+    },
+    {
+      "key": "candidate_count",
+      "label": "中标候选供应商推荐家数",
+      "template": "中标候选供应商推荐家数",
+      "type": "integer",
+      "required": false,
+      "aliases": ["中标候选供应商推荐家数", "推荐家数"]
+    },
+    {
+      "key": "winner_count",
+      "label": "中标供应商数量",
+      "template": "中标供应商数量",
+      "type": "integer",
+      "required": false,
+      "aliases": ["中标供应商数量", "中标人数量"]
+    },
+    {
+      "key": "valid_supplier_count",
+      "label": "有效供应商家数",
+      "template": "有效供应商家数",
+      "type": "integer",
+      "required": false,
+      "aliases": ["有效供应商家数", "最低有效供应商家数"]
+    },
+    {
+      "key": "agency_fee",
+      "label": "代理服务费说明",
+      "template": "代理服务费说明",
+      "type": "text",
+      "required": false,
+      "aliases": ["代理服务费", "招标代理服务费", "采购代理服务费"]
+    },
+    {
+      "key": "sme_policy",
+      "label": "专门面向中小企业说明",
+      "template": "专门面向中小企业说明",
+      "type": "text",
+      "required": false,
+      "aliases": ["中小企业", "中小微企业", "专门面向中小企业", "预留份额"],
+      "sections": ["资格要求", "供应商资格"],
+      "description": "中小企业预留份额或专门面向中小企业的政策说明，保留原文关键条款。"
+    },
+    {
+      "key": "inquiry_contact",
+      "label": "质疑联系人",
+      "template": "质疑联系人",
+      "type": "text",
+      "required": false,
+      "aliases": ["质疑联系人", "质疑联系人姓名"]
+    },
+    {
+      "key": "inquiry_phone",
+      "label": "质疑联系电话",
+      "template": "质疑联系电话",
+      "type": "phone",
+      "required": false,
+      "aliases": ["质疑联系电话", "质疑电话"]
+    },
+    {
+      "key": "inquiry_address",
+      "label": "质疑联系地址",
+      "template": "质疑联系地址",
+      "type": "text",
+      "required": false,
+      "aliases": ["质疑联系地址", "质疑地址"]
+    },
+    {
+      "key": "business_score",
+      "label": "商务分值",
+      "template": "商务分值",
+      "type": "score",
+      "required": false,
+      "aliases": ["商务部分", "商务分值", "商务评分"]
+    },
+    {
+      "key": "tech_score",
+      "label": "技术分值",
+      "template": "技术分值",
+      "type": "score",
+      "required": false,
+      "aliases": ["技术部分", "技术分值", "技术评分"]
+    },
+    {
+      "key": "credit_score",
+      "label": "信用分值",
+      "template": "信用分值",
+      "type": "score",
+      "required": false,
+      "aliases": ["综合信用分", "信用分值", "信用评分"]
+    },
+    {
+      "key": "price_score",
+      "label": "价格分值",
+      "template": "价格分值",
+      "type": "score",
+      "required": false,
+      "aliases": ["报价得分", "价格分值", "价格分"]
+    },
+    {
+      "key": "tech_review_item_1",
+      "label": "技术评审项1",
+      "template": "技术评审项1",
+      "type": "text",
+      "required": false,
+      "aliases": ["技术评审项", "技术评分项"]
+    },
+    {
+      "key": "tech_review_score_1",
+      "label": "技术评审项得分1",
+      "template": "技术评审项得分1",
+      "type": "score",
+      "required": false,
+      "aliases": ["技术评审项得分"]
+    },
+    {
+      "key": "tech_review_content_1",
+      "label": "技术评审项内容1",
+      "template": "技术评审项内容1",
+      "type": "text",
+      "required": false,
+      "aliases": ["技术评审项内容", "技术评分标准"]
+    },
+    {
+      "key": "business_review_item_1",
+      "label": "商务评审项1",
+      "template": "商务评审项1",
+      "type": "text",
+      "required": false,
+      "aliases": ["商务评审项", "商务评分项"]
+    },
+    {
+      "key": "business_review_score_1",
+      "label": "商务评审项得分1",
+      "template": "商务评审项得分1",
+      "type": "score",
+      "required": false,
+      "aliases": ["商务评审项得分"]
+    },
+    {
+      "key": "business_review_content_1",
+      "label": "商务评审项内容1",
+      "template": "商务评审项内容1",
+      "type": "text",
+      "required": false,
+      "aliases": ["商务评审项内容", "商务评分标准"]
+    },
+    {
+      "key": "contract_scope",
+      "label": "合同服务范围",
+      "template": "合同服务范围",
+      "type": "text",
+      "required": false,
+      "aliases": ["服务范围", "采购内容", "采购标的"],
+      "sections": ["采购标的", "合同"],
+      "description": "合同项下的服务范围，可由采购标的汇总生成。"
+    },
+    {
+      "key": "contract_party_a_rights",
+      "label": "合同甲方权利义务",
+      "template": "合同甲方权利义务",
+      "type": "text",
+      "required": false,
+      "aliases": ["甲方权利义务", "甲方权利和义务"]
+    },
+    {
+      "key": "contract_party_b_rights",
+      "label": "合同乙方权利义务",
+      "template": "合同乙方权利义务",
+      "type": "text",
+      "required": false,
+      "aliases": ["乙方权利义务", "乙方权利和义务"]
+    },
+    {
+      "key": "contract_prepay_ratio",
+      "label": "合同预付款比例",
+      "template": "合同预付款比例",
+      "type": "ratio",
+      "required": false,
+      "aliases": ["预付款", "预付款比例"],
+      "sections": ["付款", "款项支付", "商务要求"],
+      "description": "预付款占合同金额的比例，可由预付款金额和预算金额计算，输出百分数。"
+    },
+    {
+      "key": "contract_settlement",
+      "label": "合同费用结算方式",
+      "template": "合同费用结算方式",
+      "type": "text",
+      "required": false,
+      "aliases": ["费用结算", "结算方式", "付款方式"],
+      "sections": ["付款", "款项支付", "商务要求"]
+    },
+    {
+      "key": "contract_ip",
+      "label": "合同知识产权归属",
+      "template": "合同知识产权归属",
+      "type": "text",
+      "required": false,
+      "aliases": ["知识产权", "知识产权归属"]
+    },
+    {
+      "key": "contract_confidentiality",
+      "label": "合同保密内容",
+      "template": "合同保密内容",
+      "type": "text",
+      "required": false,
+      "aliases": ["保密", "保密条款"]
+    },
+    {
+      "key": "contract_copies",
+      "label": "合同份数",
+      "template": "合同份数",
+      "type": "integer",
+      "required": false,
+      "aliases": ["合同份数", "一式几份"]
+    },
+    {
+      "key": "project_summary",
+      "label": "项目摘要",
+      "template": null,
+      "type": "text",
+      "required": false,
+      "aliases": [],
+      "description": "供平台列表页/审核页展示的 2-4 句项目摘要，必须基于原文，不得添加原文没有的承诺。"
+    }
+  ]
+}

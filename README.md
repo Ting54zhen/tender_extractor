@@ -1,0 +1,332 @@
+# 招标需求解析组件（tender-extractor）
+
+面向招标平台后端的关键信息抽取部件：输入采购需求报告（.docx / .pdf / .txt），输出**结构化字段 JSON**，由平台自己的表单或模板渲染层完成回填。组件**不修改 Word 文件**。
+
+处理链路：
+
+```
+DOCX 解析 → 文档类型校验（非招标/采购文件则提示并跳过）
+          → 规则抽取 → 本地 LLM 补缺 → 合并去冲突
+          → 数据清洗/归一化 → 字段与跨字段校验
+          → 校验错误 + 原文证据回喂 LLM 修复（最多 2 轮）
+          → 复核清单 + 审计信息 + 模板占位符映射
+```
+
+## 1. 特性
+
+- **默认本地闭环**：默认只访问本机 Ollama（`http://127.0.0.1:11434`），文档不出内网；也可切换到任意 OpenAI 兼容 API（`provider=openai`），用于云端模型或公司内网模型网关。
+- **文档类型前置校验**：解析后先判断输入是不是招标/采购需求类文件；简历、论文、说明书等无关文档只返回提示，不进入规则或模型抽取。
+- **规则优先**：项目名称、预算、期限、采购标的、付款分期等能从原文直接读到的字段由确定性规则产出；模型不可用时仍可运行（`--no-llm`）。
+- **证据可回链**：每个值携带 `block_id` + 原文引文，便于平台展示和人工复核。
+- **清洗后回喂**：金额、日期、比例、电话、枚举等先归一化；校验失败时把错误原因、允许值和原文片段一起回喂模型，只接受“能回链且通过校验”的修复。
+- **冲突显式化**：规则与模型取值不一致时保留双方候选并标记 `conflict`，不静默覆盖。
+- **模板映射**：`template_values` 以中文占位符名为 key，直接对应标准招标文件模板中的 `{项目名称}`、`{预算金额}` 等。
+- **可审计**：输出 `meta`、`audit`、`review`，记录模型、耗时、调用统计、修复轮次和复核优先级。
+
+## 2. 快速开始
+
+### 2.1 安装
+
+```bash
+python -m pip install -e .
+# 可选：PDF 支持
+python -m pip install -e ".[pdf]"
+# 开发依赖
+python -m pip install -e ".[dev]"
+```
+
+要求 Python 3.10+。核心依赖只有 `python-docx`（MIT）。
+
+### 2.2 准备本地模型
+
+```bash
+ollama serve
+ollama pull qwen2.5:3b-instruct
+python -m tender_extractor health
+```
+
+默认模型 Qwen2.5-3B-Instruct（Apache-2.0，约 1.9GB，4GB 显存可跑）。显存充足可换 7B，修改 `settings.json` 或命令行 `--model`。
+
+### 2.3 接入 API（OpenAI 兼容，可选）
+
+默认走本机 Ollama。如果要接云端 API 或公司内网的模型网关，把 `provider` 设为 `openai`，指向任何兼容 `POST {base_url}/chat/completions` 的服务，例如 DeepSeek、通义千问 compatible-mode、Kimi、智谱、硅基流动、OpenAI，以及 vLLM / LM Studio / One-API 这类自建网关。
+
+```bash
+# 推荐把 key 放环境变量，避免进入命令历史和日志
+export TENDER_EXTRACTOR_API_KEY="sk-..."          # PowerShell: $env:TENDER_EXTRACTOR_API_KEY="sk-..."
+
+tender-extract extract "需求报告.docx" \
+  --provider openai \
+  --base-url https://api.deepseek.com/v1 \
+  --model deepseek-chat
+```
+
+先检查接口和 key 是否可用：
+
+```bash
+tender-extract health --provider openai \
+  --base-url https://api.deepseek.com/v1 --model deepseek-chat
+```
+
+也可以把配置写进 `settings.json`：
+
+```json
+"llm": {
+  "provider": "openai",
+  "base_url": "https://api.deepseek.com/v1",
+  "model": "deepseek-chat",
+  "api_key": "",
+  "api_key_env": "TENDER_EXTRACTOR_API_KEY",
+  "timeout_seconds": 120,
+  "max_tokens": 2048,
+  "json_mode": true
+}
+```
+
+常见服务的 `base_url`：
+
+| 服务 | base_url | 模型示例 |
+|------|----------|----------|
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| Kimi | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
+| 智谱 | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` |
+| 硅基流动 | `https://api.siliconflow.cn/v1` | `Qwen/Qwen2.5-7B-Instruct` |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+
+说明：
+
+- `api_key` 直接写在配置里也可以，但优先用 `api_key_env`；默认依次读取 `TENDER_EXTRACTOR_API_KEY`、`OPENAI_API_KEY`。
+- `base_url` 要包含版本路径（如 `/v1`），组件不会自动补全。
+- `json_mode=true` 会发送 `response_format: {"type": "json_object"}`；服务不支持时自动去掉并重试一次。
+- 模型输出仍要经过证据核验和字段校验，不会直接采信 API 返回。
+- 401/403 会直接判为不可用；429/5xx 最多重试 2 次；`/models` 不可用的网关也能正常抽取。
+
+> **合规提醒**：`provider=openai` 会把文档片段发送到该接口。涉密或内网资料请继续用 `ollama`，或把 `base_url` 指向内网自建网关。
+
+### 2.4 抽取
+
+```bash
+# 完整链路（规则 + 本地模型 + 校验回喂）
+# 默认输出到 D:\ClaudeCode\招标需求解析组件\结果审核报告\：
+#   需求报告-结果.json、需求报告-审核报告.md
+tender-extract extract "需求报告.docx"
+
+# 无模型环境 / 回归测试（仍会写结果和审核报告，只是不调用模型）
+tender-extract extract "需求报告.docx" --no-llm
+
+# 指定其他输出目录
+tender-extract extract "需求报告.docx" --output-dir "D:\某个目录"
+
+# 只写 JSON，不生成审核报告
+tender-extract extract "需求报告.docx" --no-md
+
+# 显式指定文件名（此时不做自动改名，按给定路径写入）
+tender-extract extract "需求报告.docx" -o "结果.json" --md "审核报告.md"
+
+# 只看文档解析结构
+tender-extract inspect "需求报告.docx"
+
+# 确认不是招标/采购文件、但仍要强制抽取
+tender-extract extract "其他文件.docx" --allow-non-tender
+```
+
+输出目录按 `--output-dir` > `settings.json` 的 `output.dir` > 组件内置默认目录的顺序解析。未指定 `-o` / `--md` 时，文件名取输入文件名（去扩展名）加 `-结果.json` / `-审核报告.md`；若同名文件已存在，自动追加 `-2`、`-3`，不覆盖历史结果。显式传 `-o` / `--md` 时，只写文件名（如 `-o 结果.json`）也会放进输出目录；带目录的路径按原样写入。
+
+退出码：`0` 成功；`1` 运行失败；加了 `--fail-on-review` 且存在高风险复核项时返回 `2`；识别为非招标/采购需求文件并跳过抽取时返回 `3`。
+
+## 3. 输出结构
+
+CLI 默认把结果 JSON 和人工审核报告写入 `D:\ClaudeCode\招标需求解析组件\结果审核报告\`（可用 `--output-dir` 或 `settings.json` 的 `output.dir` 调整）。
+
+Markdown 审核报告包含九节：概览、审核提示与处理建议、逐字段值与证据、规则/模型冲突对比、校验与归一化、结构化条款（采购标的、付款、交付、质保等）、模板回填、审计过程（模型调用、回喂接受/丢弃原因、清洗统计）、审核说明。
+
+```jsonc
+{
+  "source":  { "path": "...", "filename": "...", "sha256": "...", "title": "..." },
+  "meta":    { "use_llm": true, "llm_available": true,
+               "llm_provider": "ollama", "model": "qwen2.5:3b-instruct",
+               "extraction_skipped": false,
+               "confidence_summary": { "...": "..." },
+               "template_coverage": { "total": 46, "filled": 13, "rate": 0.2826 } },
+  "document_type": { "is_tender": true, "score": 12.5, "threshold": 4.0,
+                     "confidence": 0.98, "reason": "识别为招标/采购需求类文件…" },
+  "template_values": { "项目名称": "...", "预算金额": "1,366,800.0000元", "...": "..." },
+  "missing_templates": ["采购代理机构", "..."],
+  "fields": {
+    "project_name": {
+      "label": "项目名称", "template": "项目名称",
+      "value": "2025年社区管理与服务专业教学资源库委托服务项目",
+      "raw_value": "...", "confidence": 0.91,
+      "status": "ok",              // ok | low_confidence | inferred | missing | invalid | conflict
+      "source": "label",           // label | table | regex | computed | inferred | llm | rule+llm
+      "evidence": [{ "block_id": "B12", "quote": "...", "section": "一、项目概况" }],
+      "errors": [], "warnings": [], "attempts": 0, "notes": ""
+    }
+  },
+  "structured": {
+    "project_table": {}, "business_requirements": {},
+    "procurement_items": [], "procurement_total_declared": "...",
+    "qualifications": "...", "after_sales": "...",
+    "payment": { "installments": [], "prepay_amount": "...", "balance_amount": "...", "prepay_ratio": 0.3073 },
+    "delivery": {}, "star_clauses": [], "project_summary": "...", "outline": []
+  },
+  "validation": { "ok": true, "errors": [], "warnings": [], "normalizations": [] },
+  "cleaning":   { "paragraphs": 0, "tables": 0, "chars_raw": 0, "chars_clean": 0, "normalizations": [] },
+  "review":     [{ "priority": "high|medium|low", "key": "...", "issue": "...", "value": "...", "evidence": [] }],
+  "audit":      { "llm": {}, "repair_rounds": [], "conflicts": {}, "rule_candidates": 0, "evidence_blocks": 0 }
+}
+```
+
+当 `meta.extraction_skipped=true` 时，说明文档类型校验未通过：`fields`、`template_values`、`structured` 为空，`meta.reject_reason` 和 `document_type` 给出原因、得分与命中特征，`review` 中有一条高优先级「文档类型」提示。此时不会调用模型，也不会执行规则抽取。
+
+平台接入建议：
+
+1. 先检查 `meta.extraction_skipped`：为 `true` 时不要回填模板，直接把 `reject_reason` 提示给用户。
+2. 用 `template_values` 绑定模板占位符；缺失项走人工补录。
+3. `review` 中 `priority=high` 的项必须人工确认后才能提交。
+4. 保存 `source.sha256`、`meta.prompt_version`、`meta.model` 和 `audit`，满足审计追溯。
+5. 金额字段按字符串保存，避免浮点误差；预算金额固定保留 4 位小数（如 `1,366,800.0000元`），其他金额默认 2 位；结构化的 `payment.prepay_ratio` 为 0–1 小数。
+
+## 4. Python 集成
+
+```python
+from tender_extractor import extract_document
+
+result = extract_document(
+    "需求报告.docx",
+    use_llm=True,
+    settings_override={"llm": {"model": "qwen2.5:3b-instruct"}},
+)
+data = result.to_dict()
+template_values = data["template_values"]
+high_risk = [item for item in data["review"] if item["priority"] == "high"]
+```
+
+走 API 时只改 `settings_override`，代码不用动：
+
+```python
+from tender_extractor import extract_document
+
+result = extract_document(
+    "需求报告.docx",
+    settings_override={
+        "llm": {
+            "provider": "openai",
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-chat",
+            "api_key_env": "TENDER_EXTRACTOR_API_KEY",  # 或直接传 api_key
+        }
+    },
+)
+```
+
+长驻服务中建议复用 `Extractor` 实例，避免重复读取配置：
+
+```python
+from tender_extractor import Extractor
+
+extractor = Extractor()  # 配置只加载一次
+result = extractor.extract(path, use_llm=True)
+```
+
+## 5. 数据清洗与校验回喂
+
+1. **文本层**：去控制字符、统一空白、保留中文标点；表格单元格内换行压平；NFKC 仅用于匹配，不改变输出。
+2. **值层**：`1,366,800.00元` / `136.68万元` / 中文大写金额统一为金额；预算金额保留 4 位小数（`1,366,800.0000元`），其他金额默认 2 位；比例统一 0–1；电话去空格；枚举先判否定再判肯定。
+3. **校验层**：字段类型/必填/枚举/范围，加跨字段勾稽（标的合计 vs 预算、数量×单价 vs 金额、预付款+尾款 vs 预算、预付比例一致性）。
+4. **回喂层**：把字段当前值、校验错误、允许值和原文片段拼成修复提示，最多 `max_repair_rounds` 轮；修复值必须通过同样的校验且能回链原文，否则丢弃并保留原值。
+5. **模型证据核验**：模型返回的 `evidence` 必须先去掉它抄进来的 `[B12|章节]` 前缀；值必须真的出现在证据片段中。短值（如 `1`、`允许`）还要求同一片段里出现字段别名，防止“到处都能匹配”的假证据。证据不可靠时，用“值 + 别名”在原文重新定位；仍定位不到就丢弃该模型值。
+
+在 2025 年社区管理与服务专业教学资源库样本上（Qwen2.5-3B-Instruct，CPU/单卡约 1 分钟）：
+规则层 14 个字段有值、模板覆盖 13/46；模型补缺后仍为 14 个字段，但 8 个字段得到规则+模型一致确认，0 个校验错误，4 个中优先级复核项（采购人推断、采购人地址推断、合同分包推断、预付比例与模型冲突）。3B 模型曾给出“招标代理服务费”“合同份数 1”等无证据值，已被证据核验丢弃。
+
+## 6. 配置
+
+配置已随包发布在 `src/tender_extractor/config/`：
+
+- `fields.json`：字段定义、中文标签、模板占位符、类型、别名、所属章节、枚举值。
+- `settings.json`：接入方式（`provider`）、服务地址/模型/API key 环境变量、超时、上下文预算、最低置信度、模糊回链阈值、最大修复轮数，以及文档类型校验开关（`require_tender_document`）和阈值（`document_type_threshold`，默认 4.0）；`output.dir` 为 CLI 默认输出目录（当前为 `D:/ClaudeCode/招标需求解析组件/结果审核报告`），部署到其他机器时改这一项即可。
+
+部署时可用 `--config-dir` 或环境变量 `TENDER_EXTRACTOR_CONFIG` 指向外置配置目录，便于不同项目调整字段和别名，不必改代码。
+
+新增字段时，在 `fields.json` 的 `fields` 中加一项，并确保 `template` 与标准模板占位符完全一致（不含花括号）。金额字段可用 `"precision": 4` 指定小数位；不写时默认 2 位，预算金额当前配置为 4 位。
+
+## 7. 商用与合规
+
+| 组件 | 许可证 | 说明 |
+|------|--------|------|
+| 本项目代码 |  Proprietary | 按招标平台商业授权使用 |
+| python-docx | MIT | 允许商用 |
+| pdfplumber（可选） | MIT | 允许商用 |
+| Ollama | MIT | 本地推理运行时 |
+| Qwen2.5-3B-Instruct | Apache-2.0 | 允许商用，需保留版权与许可声明 |
+
+- 默认配置下（`provider=ollama`）本组件不调用任何外部云服务，模型与文档均在本机处理；只有显式切换到 `provider=openai` 时，文档片段才会发送到所配置的接口。
+- 不使用 AGPL 依赖（例如 PyMuPDF）；PDF 支持选用 MIT 的 pdfplumber。
+- 模型输出不作为最终事实：所有字段带置信度、状态和原文证据，高风险项进入人工复核清单。
+- 建议在生产环境固定模型版本与 `prompt_version`，并对同一文档保留输入哈希和输出快照。
+
+## 8. 已知限制
+
+- 文档类型校验基于标题、章节、实体词和采购表格的规则打分，不是通用分类器；阈值可通过 `document_type_threshold` 调整，误判时可用 `--allow-non-tender` 强制抽取。
+- 旧版 `.doc` 不支持，请先另存为 `.docx`。
+- 扫描件 PDF 无文字层时无法抽取，需要先做 OCR。
+- 3B 模型对长文档和复杂表格的补缺能力有限，核心字段主要依赖规则层；建议用真实样本做回归评测后再调整提示词。
+- 模板占位符变更时需同步更新 `fields.json` 的 `template` 字段。
+- 当前只输出结构化信息，不生成或修改 Word 文档。
+- 平台适配层目前只生成单个项目包 `P1`；多标段/分包需求需要先补充标段识别规则。
+
+## 9. 科瑞平台适配（AI 识别预览）
+
+`platform_adapter` 把抽取结果转换成平台新建项目页「AI 识别预览」所需的草稿结构，供平台后端直接落库：
+
+```python
+from tender_extractor import recognize_to_draft, PlatformRecognitionError
+
+try:
+    draft = recognize_to_draft("需求报告.docx", use_llm=True)
+except PlatformRecognitionError as exc:
+    # exc.code == "NOT_TENDER_DOCUMENT" 时提示用户换文件
+    print(exc.code, exc.message)
+else:
+    # draft 可直接作为 initialization/drafts 的 data
+    print(draft["fields"], draft["packages"], draft["subjects"])
+```
+
+也可以先抽取再转换，便于复用 `Extractor` 实例：
+
+```python
+from tender_extractor import Extractor, to_platform_draft
+
+result = Extractor().extract("需求报告.docx", use_llm=True)
+draft = to_platform_draft(result)
+```
+
+输出与平台对齐的部分：
+
+| 组件字段 | 平台 `field_code` | 平台取值 |
+|---|---|---|
+| `project_name` | `project_name` | 原文 |
+| `purchaser` | `procurement_unit` | 原文 |
+| `supervision_unit` | `supervision_unit` | 原文 |
+| `budget_amount` | `budget_amount` | 纯数字两位小数，如 `1366800.00` |
+| `procurement_method` | `purchase_mode` | `PUBLIC_TENDER` 等大写码 |
+| `tender_org_form` | `tender_org_form` | `SELF` / `ENTRUSTED` |
+| `purchaser_contact_person` | `contact_person` | 原文 |
+| `purchaser_contact` | `contact_phone` | 只保留电话号码 |
+| `purchaser_address` | `link_address` | 原文；不再用交付地点推断 |
+
+- 采购方式只映射平台现有的 5 个码；`邀请招标`、`框架协议采购` 会写入 `warnings` 且不回填，避免猜错。
+- 项目包目前固定生成一个 `P1`，采购标的挂在 `P1` 下；多标段分包仍在规划中。
+- 草稿的 `version/status/draft_uuid/project_id/file_name/file_size/warnings` 与平台一致；`evidence` 为 `{quote, page_no: null, section}`。
+- 适配层只负责“识别结果 → 草稿 JSON”，不负责草稿存储、历史列表、绑定和项目创建，这些仍由平台后端负责。
+- 平台金额契约是两位小数纯数字；`fields.json` 里的 `precision` 只影响组件自身输出，不会改变适配层的平台格式。
+
+## 10. 测试
+
+```bash
+python -m pytest
+```
+
+测试覆盖清洗/归一化、DOCX 合并单元格解析、规则抽取、模板映射和校验结果，默认不访问网络与模型。
