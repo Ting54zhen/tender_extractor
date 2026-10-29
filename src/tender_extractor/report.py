@@ -40,15 +40,30 @@ PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 CONFIRM_STATUSES = {"inferred", "low_confidence", "invalid", "conflict"}
 
 
-def _cell(value: Any, limit: int = 400) -> str:
+def _clip(text: str, limit: int) -> str:
+    """超长截断，省略号计入 limit。"""
+    if len(text) > limit:
+        return text[: limit - 1] + "…"
+    return text
+
+
+def _display(value: Any, escape_pipe: bool = False, limit: int = 400) -> str:
+    """表格/引用通用的单行展示：压平换行、空值给破折号、超长截断。
+
+    空值兜底必须发生在截断之前，否则 limit=0 时破折号会被截成省略号。
+    """
     if value is None:
         return "—"
-    text = str(value).replace("\r", " ").replace("\n", " ").replace("|", "\\|").strip()
+    text = str(value).replace("\r", " ").replace("\n", " ").strip()
     if not text:
         return "—"
-    if len(text) > limit:
-        text = text[: limit - 1] + "…"
-    return text
+    if escape_pipe:
+        text = text.replace("|", "\\|")
+    return _clip(text, limit)
+
+
+def _cell(value: Any, limit: int = 400) -> str:
+    return _display(value, escape_pipe=True, limit=limit)
 
 
 def _plain(value: Any) -> str:
@@ -59,14 +74,7 @@ def _plain(value: Any) -> str:
 
 
 def _quote(value: Any, limit: int = 400) -> str:
-    if value is None:
-        return "—"
-    text = str(value).replace("\r", " ").replace("\n", " ").strip()
-    if not text:
-        return "—"
-    if len(text) > limit:
-        text = text[: limit - 1] + "…"
-    return text
+    return _display(value, limit=limit)
 
 
 def _confidence(value: Any) -> str:
