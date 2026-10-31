@@ -16,6 +16,23 @@
     "max_repair_rounds": 2,
     "context_char_budget": 7000
   },
+  "review": {
+    "enabled": true,
+    "provider": "ollama",
+    "base_url": "http://127.0.0.1:11434",
+    "model": "qwen2.5:1.5b-instruct",
+    "api_key": "",
+    "api_key_env": "TENDER_REVIEWER_API_KEY",
+    "timeout_seconds": 180,
+    "max_tokens": 2048,
+    "json_mode": true,
+    "temperature": 0.0,
+    "scope": "llm",
+    "max_fields": 8,
+    "context_char_budget": 5000,
+    "reject_action": "flag",
+    "num_predict": 1024
+  },
   "extraction": {
     "min_confidence": 0.6,
     "grounding_fuzzy_threshold": 0.86,

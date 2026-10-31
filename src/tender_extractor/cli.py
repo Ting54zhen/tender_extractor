@@ -14,6 +14,7 @@ from .document import read_document
 from .llm_client import build_llm_client
 from .pipeline import Extractor
 from .report import render_markdown
+from .reviewer import resolve_settings
 
 DEFAULT_OUTPUT_DIR = Path("D:/ClaudeCode/招标需求解析组件/结果审核报告")
 
@@ -69,6 +70,26 @@ def _build_overrides(args: argparse.Namespace) -> dict:
         settings["llm"]["max_repair_rounds"] = args.max_repair_rounds
     if getattr(args, "no_llm", False):
         settings["llm"]["enabled"] = False
+
+    review: dict = {}
+    for attr, key in (
+        ("review_provider", "provider"),
+        ("review_model", "model"),
+        ("review_base_url", "base_url"),
+        ("review_api_key", "api_key"),
+        ("review_api_key_env", "api_key_env"),
+        ("review_scope", "scope"),
+    ):
+        value = getattr(args, attr, None)
+        if value:
+            review[key] = value
+    if getattr(args, "no_review", False):
+        review["enabled"] = False
+    elif getattr(args, "review", False) or review:
+        # 显式传了复核模型参数，视为要启用复核。
+        review["enabled"] = True
+    if review:
+        settings["review"] = review
     return settings
 
 
@@ -168,22 +189,41 @@ def cmd_health(args: argparse.Namespace) -> int:
             json.dumps({"available": False, "reason": str(exc)}, ensure_ascii=False, indent=2)
         )
         return 1
-    print(
-        json.dumps(
-            {
-                "provider": client.provider,
-                "base_url": getattr(client, "base_url", ""),
-                "available": health.available,
-                "reason": health.reason,
-                "model": client.model,
-                "model_present": health.model_present,
-                "models": health.models,
-            },
-            ensure_ascii=False,
-            indent=2,
+    payload = {
+        "provider": client.provider,
+        "base_url": getattr(client, "base_url", ""),
+        "available": health.available,
+        "reason": health.reason,
+        "model": client.model,
+        "model_present": health.model_present,
+        "models": health.models,
+    }
+    ok = bool(health.available and health.model_present)
+
+    if getattr(args, "review", False):
+        review_settings = resolve_settings(
+            extractor.settings.get("review") or {},
+            extractor.settings.get("llm") or {},
         )
-    )
-    return 0 if health.available and health.model_present else 1
+        try:
+            reviewer = build_llm_client(review_settings)
+            state = reviewer.health()
+        except Exception as exc:
+            payload["reviewer"] = {"available": False, "reason": str(exc)}
+            ok = False
+        else:
+            payload["reviewer"] = {
+                "provider": reviewer.provider,
+                "base_url": getattr(reviewer, "base_url", ""),
+                "model": reviewer.model,
+                "available": state.available,
+                "model_present": state.model_present,
+                "reason": state.reason,
+            }
+            ok = ok and bool(state.available and state.model_present)
+
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if ok else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -225,6 +265,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="跳过文档类型检查，强制抽取（默认非招标/采购文件会提示并退出）",
     )
+    extract.add_argument(
+        "--review",
+        action="store_true",
+        help="启用第三方模型复核（读取 settings.json 的 review 配置）",
+    )
+    extract.add_argument("--no-review", action="store_true", help="关闭第三方模型复核")
+    extract.add_argument("--review-provider", help="复核模型接入方式：openai（默认）或 ollama")
+    extract.add_argument("--review-model", help="复核模型名，例如 deepseek-chat")
+    extract.add_argument("--review-base-url", help="复核服务地址（含版本路径）")
+    extract.add_argument("--review-api-key", help="复核服务 API key；建议用环境变量")
+    extract.add_argument("--review-api-key-env", help="读取复核 API key 的环境变量名")
+    extract.add_argument(
+        "--review-scope",
+        choices=["llm", "all"],
+        help="复核范围：llm=只复核模型产出（默认），all=所有有值字段",
+    )
     extract.add_argument("--fail-on-review", action="store_true", help="有高风险审核项时返回退出码 2")
     extract.set_defaults(func=cmd_extract)
 
@@ -239,6 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     health.add_argument("--api-key", help="API key；建议改用环境变量")
     health.add_argument("--api-key-env", help="读取 API key 的环境变量名")
     health.add_argument("--config-dir", help="配置目录（fields.json/settings.json）")
+    health.add_argument("--review", action="store_true", help="同时检查第三方复核模型（review 段）")
     health.set_defaults(func=cmd_health)
 
     return parser

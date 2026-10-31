@@ -12,6 +12,91 @@ DOCX 解析 → 文档类型校验（非招标/采购文件则提示并跳过）
           → 复核清单 + 审计信息 + 模板占位符映射
 ```
 
+## 项目结构
+
+```
+招标需求解析组件/
+├── 采购需求样本/          # 输入样本 .docx
+├── 结果审核报告/          # 输出：-结果.json / -审核报告.md / -平台草稿.json
+├── examples/              # 使用示例（extract_demo.py）
+├── scripts/               # 启动脚本（launch.py，供 start.bat 调用）
+├── src/
+│   └── tender_extractor/  # 核心包
+│       ├── config/        #   fields.json（字段定义）、settings.json（运行配置）
+│       ├── static/        #   index.html（Web 界面，单文件内联 CSS/JS）
+│       └── *.py           #   核心模块（cli/document/pipeline/llm_*/report/...）
+├── tests/                 # 单元测试（pytest）
+├── pyproject.toml         # 项目元数据与依赖
+├── README.md              # 本文档
+└── start.bat              # Windows 一键启动
+```
+
+> `src/*.egg-info/` 与各目录下的 `__pycache__/` 是安装/运行自动生成的产物，已在 `.gitignore` 中忽略，无需手动管理。
+
+## 文件职责
+
+### 核心源码（`src/tender_extractor/`）
+
+| 文件 | 作用 |
+|------|------|
+| `__init__.py` | 包入口与对外 API，导出 `Extractor`、`ExtractionResult`，提供一行式 `extract_document()` |
+| `__main__.py` | `python -m tender_extractor` 直启入口，转发到 `cli.main()` |
+| `cli.py` | 命令行入口，解析参数、构建配置覆盖并驱动抽取与报告输出 |
+| `document.py` | 文档解析层，把 docx/pdf/txt 转成有序 `Block` 列表，保留段落/表格顺序与合并单元格 |
+| `doc_type.py` | 抽取前文档类型识别，拦下非招标/采购文件，避免硬抽编造 |
+| `sections.py` | 按中文编号切分章节并写回每个 `Block` |
+| `rules.py` | 确定性规则抽取层，项目名/预算/商务条款等可直接读字段不依赖模型 |
+| `llm_client.py` | 模型客户端工厂，解析 provider 别名并创建 Ollama/OpenAI 客户端 |
+| `llm_common.py` | LLM 客户端共用类型、错误、健康检查结构与 JSON 提取工具（避免循环依赖） |
+| `llm_extract.py` | 本地大模型抽取与"校验失败回喂"修复逻辑（只补缺不编造） |
+| `ollama_client.py` | 本地 Ollama 客户端，仅用标准库直连本机 Ollama |
+| `openai_client.py` | OpenAI 兼容客户端，适配任意 `/v1/chat/completions` 服务（DeepSeek/通义/Kimi 等） |
+| `cleaning.py` | 文本清洗与值归一化（去控制字符/空白、金额/日期/百分比/电话/中文大写金额解析格式化） |
+| `validation.py` | 字段归一化、格式校验、证据回链与跨字段勾稽 |
+| `reviewer.py` | 第三方模型独立复核，以 support/reject/replace 三结论二次判断并兜底 |
+| `models.py` | 跨模块数据模型 dataclass（`Evidence`/`Block`/`Document`/`Candidate`/`FieldValue`/`ExtractionResult`） |
+| `pipeline.py` | 编排核心 `Extractor`：解析→规则→LLM→合并→校验→回喂→结构化输出 |
+| `platform_adapter.py` | 平台适配层，把抽取结果转成科瑞招标平台 AI 草稿 JSON |
+| `report.py` | 把抽取结果渲染成人工审核用的 Markdown 报告 |
+| `web.py` | 本地标准库 Web 服务，上传文档并轮询查看字段/复核/报告 |
+
+### 配置文件（`src/tender_extractor/config/`）
+
+| 文件 | 作用 |
+|------|------|
+| `fields.json` | 抽取字段定义：字段分组、key/label/template/类型/枚举值/别名/所属章节 |
+| `settings.json` | 运行参数：LLM、复核(review)、抽取(extraction)、输出(output)各段默认设置 |
+
+### 静态资源（`src/tender_extractor/static/`）
+
+| 文件 | 作用 |
+|------|------|
+| `index.html` | Web 界面单页前端（上传区、状态、字段/复核/报告展示），内联 CSS/JS 无 CDN |
+
+### 脚本与示例
+
+| 文件 | 作用 |
+|------|------|
+| `scripts/launch.py` | 一键启动器，准备 .venv 与依赖、检查模型服务，并透传参数给 CLI/Web/测试 |
+| `examples/extract_demo.py` | 最小集成示例，演示调用 `extract_document` 并打印模板映射与待复核清单 |
+| `start.bat` | Windows 启动入口，调用 `scripts/launch.py` 并处理菜单/退出码 |
+
+### 测试（`tests/`）
+
+| 文件 | 测试对象 |
+|------|----------|
+| `test_cleaning.py` | `cleaning` 清洗/归一化 |
+| `test_cli_output.py` | `cli` 输出目录解析与重名自动追加 |
+| `test_doc_type.py` | `doc_type` 文档类型前置校验与跳过逻辑 |
+| `test_document.py` | `document` docx 解析（块顺序、章节、合并单元格） |
+| `test_llm_pipeline.py` | 用本地 mock Ollama 测试 LLM 链路，不访问外网 |
+| `test_money_decimal.py` | 金额输出护栏与跨字段勾稽 |
+| `test_openai_client.py` | `openai_client` 请求格式、健康检查与端到端抽取 |
+| `test_pipeline.py` | 端到端规则层（不依赖 Ollama） |
+| `test_platform_adapter.py` | `platform_adapter` 平台草稿适配 |
+| `test_report.py` | `report` Markdown 审核报告渲染 |
+| `test_reviewer.py` | `reviewer` 第三方复核三结论与安全边界 |
+
 ## 1. 特性
 
 - **默认本地闭环**：默认只访问本机 Ollama（`http://127.0.0.1:11434`），文档不出内网；也可切换到任意 OpenAI 兼容 API（`provider=openai`），用于云端模型或公司内网模型网关。
@@ -25,7 +110,29 @@ DOCX 解析 → 文档类型校验（非招标/采购文件则提示并跳过）
 
 ## 2. 快速开始
 
-### 2.1 安装
+### 2.1 一键启动（Windows）
+
+双击 `start.bat`，或在本目录执行：
+
+```bat
+start.bat
+```
+
+首次运行会自动创建 `.venv` 并安装依赖，随后检查本机 Ollama，进入操作菜单（抽取 / 仅规则 / 健康检查 / 解析结构 / PDF 支持 / 测试）。之后启动复用同一环境，秒开；`pyproject.toml` 改动时会自动重装。
+
+也可以跳过菜单，直接透传 CLI 参数：
+
+```bat
+start.bat extract "采购需求样本\1.docx"
+start.bat extract "采购需求样本\1.docx" --no-llm
+start.bat health
+start.bat setup --pdf
+start.bat test
+```
+
+结果仍写入 `结果审核报告/`。需要自己管理环境时，按 2.2 手动安装。
+
+### 2.2 安装
 
 ```bash
 python -m pip install -e .
@@ -37,7 +144,7 @@ python -m pip install -e ".[dev]"
 
 要求 Python 3.10+。核心依赖只有 `python-docx`（MIT）。
 
-### 2.2 准备本地模型
+### 2.3 准备本地模型
 
 ```bash
 ollama serve
@@ -47,7 +154,7 @@ python -m tender_extractor health
 
 默认模型 Qwen2.5-3B-Instruct（Apache-2.0，约 1.9GB，4GB 显存可跑）。显存充足可换 7B，修改 `settings.json` 或命令行 `--model`。
 
-### 2.3 接入 API（OpenAI 兼容，可选）
+### 2.4 接入 API（OpenAI 兼容，可选）
 
 默认走本机 Ollama。如果要接云端 API 或公司内网的模型网关，把 `provider` 设为 `openai`，指向任何兼容 `POST {base_url}/chat/completions` 的服务，例如 DeepSeek、通义千问 compatible-mode、Kimi、智谱、硅基流动、OpenAI，以及 vLLM / LM Studio / One-API 这类自建网关。
 
@@ -104,7 +211,7 @@ tender-extract health --provider openai \
 
 > **合规提醒**：`provider=openai` 会把文档片段发送到该接口。涉密或内网资料请继续用 `ollama`，或把 `base_url` 指向内网自建网关。
 
-### 2.4 抽取
+### 2.5 抽取
 
 ```bash
 # 完整链路（规则 + 本地模型 + 校验回喂）
@@ -134,6 +241,27 @@ tender-extract extract "其他文件.docx" --allow-non-tender
 输出目录按 `--output-dir` > `settings.json` 的 `output.dir` > 组件内置默认目录的顺序解析。未指定 `-o` / `--md` 时，文件名取输入文件名（去扩展名）加 `-结果.json` / `-审核报告.md`；若同名文件已存在，自动追加 `-2`、`-3`，不覆盖历史结果。显式传 `-o` / `--md` 时，只写文件名（如 `-o 结果.json`）也会放进输出目录；带目录的路径按原样写入。
 
 退出码：`0` 成功；`1` 运行失败；加了 `--fail-on-review` 且存在高风险复核项时返回 `2`；识别为非招标/采购需求文件并跳过抽取时返回 `3`。
+
+### 2.6 网页界面
+
+不想敲命令时，可以启动本地网页界面：
+
+```bash
+python -m tender_extractor.web                      # 自动打开 http://127.0.0.1:8765/
+python -m tender_extractor.web --port 8766 --no-browser
+```
+
+在 `start.bat` 菜单里选 `7)`，或执行 `start.bat web` 等价。
+
+界面能力：
+
+- 拖拽或选择文件（.docx / .pdf / .txt，≤50MB），切换「完整链路 / 仅规则」，可勾选强制抽取；
+- 结果按「字段 / 待复核 / 模板映射 / 审核报告」分页展示，字段带置信度、来源和原文证据；
+- 文档类型校验未通过时说明原因，并提供「仍要抽取」入口；
+- 抽取在后台线程执行、页面轮询进度，长文档不会卡住请求；
+- 结果同时落盘到 `结果审核报告/`（`-结果.json`、`-审核报告.md`、`-平台草稿.json`），页面可直接下载。
+
+实现只用标准库 `http.server`，无 Web 框架依赖；前端是单个内联 CSS/JS 的 HTML，不引用任何 CDN，可离线部署。默认只监听 `127.0.0.1`，文档不出本机；确需局域网访问时显式传 `--host 0.0.0.0`。
 
 ## 3. 输出结构
 

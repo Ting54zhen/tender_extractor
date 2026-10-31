@@ -1,7 +1,7 @@
 """Ollama 本地模型客户端（仅标准库，避免额外依赖和商用许可问题）。
 
 所有请求只发往本地 base_url，不经过任何外部服务。
-错误类型和健康检查结果与 OpenAI 兼容客户端共用，见 ``llm_client``。
+错误类型和健康检查结果与 OpenAI 兼容客户端共用，见 ``llm_common``。
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from .llm_client import LLMError, LLMHealth, extract_json_object
+from .llm_common import LLMError, LLMHealth, extract_json_object
 
 # 兼容旧代码里的名字。
 OllamaError = LLMError

@@ -1,4 +1,4 @@
-"""模型客户端抽象、错误类型和工厂。
+"""模型客户端工厂与接入方式解析。
 
 支持的接入方式（settings.json 的 `llm.provider`）：
 
@@ -7,45 +7,28 @@
   通义千问 compatible-mode、Kimi、智谱、硅基流动、OpenAI、vLLM、
   LM Studio、One-API 等。
 
-上层只依赖 ``LLMClient`` 协议，不关心底层是哪家服务。
+共用类型（``LLMClient`` / ``LLMError`` / ``LLMHealth`` / ``extract_json_object``）
+定义在 ``llm_common``，这里继续导出，保持既有导入路径可用。
 """
 
 from __future__ import annotations
 
-import json
 import os
-import re
-from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
+from .llm_common import LLMClient, LLMError, LLMHealth, extract_json_object
 
-class LLMError(RuntimeError):
-    """模型调用失败。错误信息中不会包含 API key。"""
-
-
-@dataclass
-class LLMHealth:
-    available: bool
-    reason: str = ""
-    models: list[str] = field(default_factory=list)
-    model_present: bool = False
-
-
-@runtime_checkable
-class LLMClient(Protocol):
-    provider: str
-    model: str
-    calls: int
-    last_error: str
-
-    def health(self) -> LLMHealth: ...
-
-    def chat_json(
-        self,
-        system: str,
-        user: str,
-        schema: dict[str, Any] | str | None = None,
-    ) -> dict[str, Any]: ...
+__all__ = [
+    "LLMClient",
+    "LLMError",
+    "LLMHealth",
+    "PROVIDER_ALIASES",
+    "SUPPORTED_PROVIDERS",
+    "build_llm_client",
+    "extract_json_object",
+    "normalize_provider",
+    "resolve_api_key",
+]
 
 
 PROVIDER_ALIASES = {
@@ -118,29 +101,3 @@ def build_llm_client(settings: dict[str, Any] | None = None) -> LLMClient:
         max_tokens=int(settings.get("max_tokens", settings.get("num_predict", 2048))),
         json_mode=bool(settings.get("json_mode", True)),
     )
-
-
-def extract_json_object(text: str) -> dict[str, Any]:
-    """从模型输出里取出 JSON 对象，容忍 ``` 代码块和前后解释文字。"""
-    text = (text or "").strip()
-    if not text:
-        raise LLMError("模型返回空内容")
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text).strip()
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict):
-            return data
-    except json.JSONDecodeError:
-        pass
-
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end > start:
-        try:
-            data = json.loads(text[start : end + 1])
-            if isinstance(data, dict):
-                return data
-        except json.JSONDecodeError as exc:
-            raise LLMError(f"模型返回不是合法 JSON：{exc}") from exc
-    raise LLMError("模型返回中找不到 JSON 对象")

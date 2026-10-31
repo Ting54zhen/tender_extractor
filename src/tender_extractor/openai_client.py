@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from .llm_client import LLMError, LLMHealth, extract_json_object
+from .llm_common import LLMError, LLMHealth, extract_json_object
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 

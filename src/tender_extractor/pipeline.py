@@ -21,6 +21,7 @@ from .llm_extract import (
     select_context,
 )
 from .llm_client import LLMClient, LLMError, build_llm_client
+from .reviewer import ReviewStats, resolve_settings, review_candidates
 from .models import Candidate, Evidence, ExtractionResult, FieldValue
 from .rules import extract_rules
 from .validation import (
@@ -246,6 +247,17 @@ class Extractor:
 
         if llm_stats.available and client is not None:
             llm_stats.calls = client.calls
+
+        # 第三方模型复核：只对模型产出的值做二次判断，失败不影响主流程。
+        review_stats = ReviewStats()
+        review_items: list[dict[str, Any]] = []
+        review_settings = self.settings.get("review") or {}
+        if review_settings.get("enabled"):
+            review_stats.enabled = True
+            merged, review_stats, review_items = self._run_review(
+                doc, merged, review_settings, review_stats
+            )
+
         field_values = self._build_field_values(merged, attempts, conflicts)
         validation, normalizations = apply_validation(
             field_values,
@@ -270,7 +282,7 @@ class Extractor:
         structured["outline"] = doc.outline
         structured["business_requirements"] = rules_output.structured.get("business_requirements", {})
 
-        review = self._build_review(field_values, validation)
+        review = self._build_review(field_values, validation, review_items)
         duration_ms = int((time.perf_counter() - start) * 1000)
 
         result = ExtractionResult(
@@ -292,6 +304,7 @@ class Extractor:
                 "document_type": doc_type.to_dict(),
                 "confidence_summary": self._confidence_summary(field_values),
                 "template_coverage": self._template_coverage(field_values),
+                "review": review_stats.to_dict(),
             },
             fields=field_values,
             structured=structured,
@@ -305,6 +318,7 @@ class Extractor:
                 "document_type": doc_type.to_dict(),
                 "extraction_skipped": False,
                 "llm": llm_stats.to_dict(),
+                "review": review_stats.to_dict(),
                 "repair_rounds": repair_audit,
                 "conflicts": conflicts,
                 "rule_candidates": len(rules_output.candidates),
@@ -354,6 +368,51 @@ class Extractor:
                 if errors >= 2:
                     break
         return candidates
+
+    def _run_review(
+        self,
+        doc: Any,
+        merged: dict[str, Candidate],
+        settings: dict[str, Any],
+        stats: ReviewStats,
+    ) -> tuple[dict[str, Candidate], ReviewStats, list[dict[str, Any]]]:
+        """第三方模型复核。任何异常都降级为“未复核”，不影响主结果。"""
+        effective = resolve_settings(settings, self.settings.get("llm") or {})
+        try:
+            reviewer = build_llm_client(effective)
+        except Exception as exc:
+            stats.error = str(exc)
+            return merged, stats, []
+
+        stats.provider = reviewer.provider
+        stats.model = reviewer.model
+        try:
+            health = reviewer.health()
+        except Exception as exc:
+            stats.error = str(exc)
+            return merged, stats, []
+
+        stats.available = bool(health.available and health.model_present)
+        if not stats.available:
+            stats.error = health.reason or "复核模型不可用"
+            return merged, stats, []
+
+        working = dict(merged)
+        try:
+            updated, items = review_candidates(
+                reviewer,
+                doc,
+                self.field_defs,
+                working,
+                effective,
+                stats,
+            )
+        except Exception as exc:
+            stats.error = str(exc)
+            return merged, stats, []
+        finally:
+            stats.calls = reviewer.calls
+        return updated, stats, items
 
     def _merge_all(
         self,
@@ -480,6 +539,7 @@ class Extractor:
         self,
         fields: dict[str, FieldValue],
         validation: dict[str, Any],
+        extra: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         review: list[dict[str, Any]] = []
         for key, field in fields.items():
@@ -569,6 +629,7 @@ class Extractor:
                     "evidence": [],
                 }
             )
+        review.extend(extra or [])
         order = {"high": 0, "medium": 1, "low": 2}
         review.sort(key=lambda item: order.get(item["priority"], 9))
         return review

@@ -73,6 +73,48 @@ def _candidate(
     )
 
 
+def _header_kvs(block: Block) -> list[KV]:
+    """“序号 | 条款名称 | 内容及要求”这类带表头的三列表：按列取标签和值。
+
+    须知前附表、投标人须知资料表都是这种结构，标签不在同一行，按行取
+    两列表的规则读不到“报价形式”“有效供应商家数”等条目。
+    """
+    if len(block.rows) < 2:
+        return []
+    # 表头不一定在第一行：须知前附表上面常有一行“本表与招标文件…为准”的说明。
+    header_index = None
+    for idx, row in enumerate(block.rows[:4]):
+        if any("条款名称" in normalize_for_match(cell) for cell in row):
+            header_index = idx
+            break
+    if header_index is None:
+        return []
+    header = [normalize_for_match(cell) for cell in block.rows[header_index]]
+    label_idx = next((idx for idx, cell in enumerate(header) if "条款名称" in cell), None)
+    if label_idx is None:
+        return []
+    value_idx = next(
+        (
+            idx
+            for idx, cell in enumerate(header)
+            if idx != label_idx and any(keyword in cell for keyword in ("内容及要求", "编列内容", "内容", "要求"))
+        ),
+        None,
+    )
+    if value_idx is None:
+        return []
+
+    kvs: list[KV] = []
+    for row in block.rows[header_index + 1:]:
+        if max(label_idx, value_idx) >= len(row):
+            continue
+        label = strip_numbering(row[label_idx])
+        value = clean_text(row[value_idx])
+        if label:
+            kvs.append(KV(label=label, value=value, block=block, source="table"))
+    return kvs
+
+
 def collect_kvs(doc: Document) -> list[KV]:
     kvs: list[KV] = []
     for block in doc.blocks:
@@ -85,11 +127,19 @@ def collect_kvs(doc: Document) -> list[KV]:
             if label:
                 kvs.append(KV(label=label, value=value, block=block, source="paragraph"))
         elif block.kind == "table" and block.rows:
+            kvs.extend(_header_kvs(block))
             for row in block.rows:
-                if len(row) != 2:
+                if len(row) < 2:
                     continue
-                label = strip_numbering(row[0])
-                value = clean_text(row[1])
+                if len(row) == 2:
+                    label, value = strip_numbering(row[0]), clean_text(row[1])
+                else:
+                    # 多列表格：只有“恰好两个非空单元格”才当成 标签/值 对
+                    # （评分表、需求明细表这类整行多列的表留给专用规则，避免拼出脏值）。
+                    filled = [clean_text(cell) for cell in row if clean_text(cell)]
+                    if len(filled) != 2:
+                        continue
+                    label, value = strip_numbering(filled[0]), filled[1]
                 if label:
                     kvs.append(KV(label=label, value=value, block=block, source="table"))
     return kvs
@@ -100,6 +150,17 @@ def collect_kvs(doc: Document) -> list[KV]:
 _STRICT_SUFFIXES = (
     "地址", "联系方式", "联系电话", "电话", "联系人", "编号", "名称", "邮箱", "传真",
 )
+
+# 过于笼统的标签，只在“标签是别名子串”这种弱匹配里排除。
+_GENERIC_LABELS = {"名称", "内容", "编号", "备注"}
+
+# 须知前附表的条目常写成“采购包1：折扣价”，包号前缀不属于字段值。
+_PACKAGE_PREFIX_KEYS = {"price_method", "candidate_count", "winner_count", "valid_supplier_count"}
+_PACKAGE_PREFIX_RE = re.compile(r"^\s*采购包\s*\d+\s*[：:]\s*")
+
+
+def _strip_package_prefix(text: str) -> str:
+    return _PACKAGE_PREFIX_RE.sub("", clean_text(text))
 
 
 def _match_score(label: str, alias: str) -> float:
@@ -114,6 +175,9 @@ def _match_score(label: str, alias: str) -> float:
     if right in left:
         return 0.84
     if left in right and len(left) >= 2:
+        # 只写“名称：广州大学”的笼统标签不能当“品目名称/标的名称”的证据。
+        if left in _GENERIC_LABELS:
+            return 0.0
         extra = right.replace(left, "", 1)
         if any(suffix in extra for suffix in _STRICT_SUFFIXES):
             return 0.0
@@ -165,15 +229,139 @@ def _candidate_from_kvs(
 # ---------------------------------------------------------------------------
 
 
+# 评审表里的分值构成形如“商务部分12.0分技术部分73.0分”，不是标准的
+# 标签-值行，因此单独按文本解析，避免整张多列评分表被规则层跳过。
+_SCORE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("business_score", ("商务部分", "商务分值", "商务评分", "商务分")),
+    ("tech_score", ("技术部分", "技术分值", "技术评分", "技术分")),
+    ("credit_score", ("综合信用评价", "综合信用分", "信用分值", "信用分")),
+    ("price_score", ("投标报价得分", "报价得分", "价格分值", "价格分")),
+)
+
+_SCORING_SECTION_HINTS = ("评审", "评分", "评标", "分值")
+
+# “重要技术指标响应情况 (4.0分)”这类评审项名称
+_REVIEW_ITEM_RE = re.compile(r"^(.{2,80}?)\s*[（(]\s*(\d+(?:\.\d+)?)\s*分\s*[）)]")
+
+
+def _extract_scores(doc: Document) -> dict[str, Candidate]:
+    """从“分值构成”行或评审章节的短句中解析商务/技术/信用/报价分值。"""
+    blocks = [block for block in doc.blocks if "分值构成" in block.text]
+    if not blocks:
+        # 没有“分值构成”时，只在评审章节的短句里找，避免把评标细则里的“得3分”当总分。
+        blocks = [
+            block
+            for block in doc.blocks
+            if len(block.text) <= 200 and any(hint in block.section for hint in _SCORING_SECTION_HINTS)
+        ]
+
+    found: dict[str, Candidate] = {}
+    for block in blocks:
+        for key, aliases in _SCORE_PATTERNS:
+            if key in found:
+                continue
+            for alias in aliases:
+                match = re.search(
+                    rf"{re.escape(alias)}[^0-9。；\n]{{0,6}}(\d+(?:\.\d+)?)\s*分",
+                    block.text,
+                )
+                if match:
+                    found[key] = _candidate(
+                        match.group(1),
+                        0.88 if block.kind == "table" else 0.8,
+                        "table" if block.kind == "table" else "label",
+                        block,
+                        quote=match.group(0),
+                        note="从评审表分值构成解析",
+                    )
+                    break
+    return found
+
+
+def _extract_review_items(doc: Document) -> dict[str, Candidate]:
+    """取评审表里技术部分/商务部分的第一个评审项及其分值、评审标准。"""
+    found: dict[str, Candidate] = {}
+    for block in doc.tables:
+        if "评审因素" not in block.text and "评审标准" not in block.text:
+            continue
+        part = ""
+        for row in block.rows:
+            cells = [clean_text(cell) for cell in row]
+            for cell in cells:
+                if cell in {"技术部分", "商务部分"}:
+                    part = cell
+                    break
+            if not part:
+                continue
+            detail: tuple[str, str, str] | None = None
+            for cell in cells:
+                match = _REVIEW_ITEM_RE.match(cell)
+                if match:
+                    detail = (match.group(1).strip(), match.group(2), cell)
+                    break
+            if not detail:
+                continue
+            prefix = "tech" if part == "技术部分" else "business"
+            if f"{prefix}_review_item_1" in found:
+                continue
+            item, score, cell_text = detail
+            content = max(cells, key=len) if cells else ""
+            if content == item:
+                content = ""
+            for suffix, value, quote in (
+                ("item", item, cell_text),
+                ("score", score, cell_text),
+                ("content", content, content[:800]),
+            ):
+                if not value:
+                    continue
+                key = f"{prefix}_review_{suffix}_1"
+                if key in found:
+                    continue
+                found[key] = _candidate(
+                    value,
+                    0.86,
+                    "table",
+                    block,
+                    quote=quote,
+                    note="从评审表首个评审项解析",
+                )
+    return found
+
+
+def _value_by_header(doc: Document, keywords: Iterable[str]) -> tuple[str, Block] | None:
+    """按表头关键字取首行数据，用于“所属行业”这类列式表格。"""
+    for block in doc.tables:
+        if len(block.rows) < 2:
+            continue
+        index = _header_index(block.rows[0], keywords)
+        if index is None:
+            continue
+        for row in block.rows[1:]:
+            if index < len(row):
+                value = clean_text(row[index])
+                if value:
+                    return value, block
+    return None
+
+
 def find_project_table(doc: Document) -> tuple[dict[str, str], Block] | None:
-    """项目概况里的“采购内容/采购预算/合同履行期限”三列表。"""
+    """项目概况里的“采购内容/采购预算/合同履行期限”三列表。
+
+    政府采购文件的“采购需求”表常常是多列（序号/品目/标的/数量/预算/行业…），
+    只要表头同时有“标的类”和“预算”列就认，不再要求固定的“采购内容”表头。
+    """
     for block in doc.tables:
         if not block.rows:
             continue
         header = [normalize_for_match(cell) for cell in block.rows[0]]
-        if not any("采购内容" in h for h in header):
+        if not any(
+            keyword in h
+            for h in header
+            for keyword in ("采购内容", "标的名称", "采购标的", "服务名称", "品目名称")
+        ):
             continue
-        if not any("采购预算" in h or "预算" in h for h in header):
+        if not any("预算" in h for h in header):
             continue
         row = block.rows[1] if len(block.rows) > 1 else []
         if not row:
@@ -450,8 +638,11 @@ def extract_payment(business: dict[str, str], doc: Document, budget: Decimal | N
     total = budget or ((prepay or 0) + (balance or 0) if (prepay or balance) else None)
     ratio = (prepay / total) if (prepay and total) else None
     if ratio is None and "预付" in text:
-        # 原文常写成“支付工程预付款合同金额30%”，没有金额，只能取比例。
+        # 原文常写成“支付工程预付款合同金额30%”，没有金额，只能取比例；
+        # 也常见“支付合同总价的40%作为预付款”，比例在“预付”之前。
         match = re.search(r"预付(?:款)?[^。；\n]{0,40}?(\d+(?:\.\d+)?)\s*%", text)
+        if not match:
+            match = re.search(r"(\d+(?:\.\d+)?)\s*%[^。；\n]{0,20}?(?:作为|为|的|当作)\s*预付款", text)
         if match:
             ratio = Decimal(match.group(1)) / Decimal(100)
     methods = sorted({m for m in ("支票", "银行汇票", "电汇", "转账", "网银") if m in text})
@@ -677,10 +868,12 @@ def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutp
 
     project_name_candidate = _candidate_from_kvs(kvs, ["项目名称", "采购项目名称"], ["项目概况"])
     if not project_name_candidate and project_block:
-        project_name_candidate = _candidate(
-            project_table.get("采购内容", ""), 0.8, "table", project_block,
-            quote=project_table.get("采购内容", ""), note="取自采购内容表",
-        )
+        project_name_value = project_table.get("采购内容", "")
+        if project_name_value:
+            project_name_candidate = _candidate(
+                project_name_value, 0.8, "table", project_block,
+                quote=project_name_value, note="取自采购内容表",
+            )
     if project_name_candidate:
         output.candidates["project_name"] = project_name_candidate
 
@@ -703,9 +896,11 @@ def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutp
         candidate = _candidate_from_kvs(kvs, [alias], ["项目概况", "采购内容"])
         if candidate:
             budget_candidates.append(candidate)
-    if project_block:
+    # 明细表只有一条数据时，行内的“预算总价”就是项目预算；
+    # 多行明细表取单行预算会以偏概全，交给正文正则和跨字段校验处理。
+    if project_block and len(project_block.rows) <= 2:
         for key, value in project_table.items():
-            if "预算" in key and parse_money(value):
+            if "预算" in key and "单价" not in key and parse_money(value):
                 budget_candidates.append(
                     _candidate(value, 0.9, "table", project_block, quote=value, note="取自项目概况表")
                 )
@@ -726,13 +921,20 @@ def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutp
     if purchaser:
         output.candidates["purchaser"] = purchaser
 
+    # 评审表是多列表格，普通“标签-值”行取不到分值，这里按“分值构成”单独解析，
+    # 并优先于下面的别名匹配（“技术部分”在评分表里还会指向某个评审项）。
+    for key, score_candidate in _extract_scores(doc).items():
+        output.candidates.setdefault(key, score_candidate)
+
     for key, aliases in {
         "purchaser_address": ["采购人地址", "采购单位地址"],
         "purchaser_contact_person": ["采购人联系人", "采购单位联系人", "采购人项目联系人"],
         "purchaser_contact": [
             "采购人联系方式", "采购人联系电话", "采购单位联系方式", "采购单位联系电话",
         ],
-        "supervision_unit": ["监督单位", "监督部门"],
+        "supervision_unit": [
+            "监督单位", "监督部门", "政府采购监督管理机构名称", "监督管理机构", "监督管理部门",
+        ],
         "tender_org_form": ["招标组织形式", "组织形式"],
         "agency": ["采购代理机构", "代理机构", "招标代理机构"],
         "agency_address": ["采购代理机构地址", "代理机构地址"],
@@ -764,9 +966,16 @@ def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutp
         "contract_confidentiality": ["保密", "保密条款"],
         "contract_copies": ["合同份数", "一式几份"],
     }.items():
+        if key in output.candidates:
+            continue
         candidate = _candidate_from_kvs(kvs, aliases)
         if candidate:
+            if key in _PACKAGE_PREFIX_KEYS:
+                candidate.value = _strip_package_prefix(str(candidate.value))
             output.candidates[key] = candidate
+
+    for key, review_candidate in _extract_review_items(doc).items():
+        output.candidates.setdefault(key, review_candidate)
 
     target = _candidate_from_kvs(kvs, ["采购标的", "采购内容", "服务名称", "标的名称"], ["项目概况", "采购标的"])
     if not target and project_block:
@@ -789,7 +998,25 @@ def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutp
     if target:
         output.candidates["procurement_target"] = target
 
+    if "procurement_item" not in output.candidates and items:
+        category = next((str(item.get("category") or "") for item in items if item.get("category")), "")
+        if category:
+            output.candidates["procurement_item"] = _candidate(
+                category,
+                0.86,
+                "table",
+                items_block,
+                quote=category,
+                note="取自采购标的表的品目名称列",
+            )
+
     industry = _candidate_from_kvs(kvs, ["所属行业", "行业"])
+    if not industry:
+        # 采购需求明细表里“所属行业”是列头，值在同一列的首行数据。
+        by_header = _value_by_header(doc, ["所属行业", "行业"])
+        if by_header:
+            value, block = by_header
+            industry = _candidate(value, 0.88, "table", block, quote=value, note="取自采购需求表的所属行业列")
     if not industry:
         match = re.search(r"所属行业[：:]\s*([^\s，。；;、）)]+)", full_text)
         if match:

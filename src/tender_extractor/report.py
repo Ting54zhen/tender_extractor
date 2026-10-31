@@ -765,6 +765,41 @@ def render_markdown(result: ExtractionResult) -> str:
         )
         lines.append("")
 
+    review_audit = audit.get("review") or {}
+    if review_audit.get("enabled"):
+        lines.append("")
+        lines.append("第三方模型复核：")
+        lines.append("")
+        lines.append(
+            f"- {review_audit.get('provider', '—')} / {review_audit.get('model', '—')}，"
+            f"可用：{_bool_cn(review_audit.get('available'))}，"
+            f"复核 {review_audit.get('checked', 0)} 项："
+            f"通过 {review_audit.get('supported', 0)}，驳回 {review_audit.get('rejected', 0)}，"
+            f"改为 {review_audit.get('replaced', 0)}，未采纳 {review_audit.get('ignored', 0)}"
+        )
+        if review_audit.get("error"):
+            lines.append(f"- 复核错误：{review_audit['error']}")
+        decisions = review_audit.get("decisions") or []
+        if decisions:
+            verdict_cn = {"support": "通过", "reject": "驳回", "replace": "改为"}
+            lines.append("")
+            lines.extend(
+                _table(
+                    ["字段", "结论", "原值", "新值", "依据"],
+                    [
+                        (
+                            field_label(item.get("key")),
+                            verdict_cn.get(item.get("verdict"), item.get("verdict") or "—"),
+                            _cell(item.get("from"), 24),
+                            _cell(item.get("to"), 24),
+                            _cell(item.get("reason") or "—", 40),
+                        )
+                        for item in decisions
+                    ],
+                )
+            )
+        lines.append("")
+
     cleaning = data.get("cleaning") or {}
     if cleaning:
         lines.append(
