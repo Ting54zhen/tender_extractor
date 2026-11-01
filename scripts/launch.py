@@ -21,8 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 VENV_DIR = ROOT / ".venv"
 VENV_PY = VENV_DIR / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 STAMP = VENV_DIR / ".launcher-ready"
-OUTPUT_DIR = ROOT / "结果审核报告"
-SAMPLE_DIR = ROOT / "采购需求样本"
+DATA_DIR = ROOT / "data"
+OUTPUT_DIR = DATA_DIR / "结果审核报告"
+SAMPLE_DIR = DATA_DIR / "采购需求样本"
 DOC_SUFFIXES = {".docx", ".pdf", ".txt"}
 MIN_PYTHON = (3, 10)
 

@@ -6,6 +6,11 @@
 - 默认只监听 ``127.0.0.1``，文档不出本机；
 - 抽取在后台线程执行，页面轮询状态，避免长请求超时。
 
+L2 双文档比对：
+- ``POST /api/compare``（multipart：``tender`` + ``bid``）提交比对任务；
+- ``GET /api/jobs/{id}/compare`` 取比对结果（requirements / responses /
+  results / report）。
+
 启动::
 
     python -m tender_extractor.web              # 打开浏览器
@@ -17,6 +22,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import tempfile
 import threading
 import time
@@ -34,7 +41,25 @@ from .platform_adapter import PlatformRecognitionError, to_platform_draft
 from .report import render_markdown
 
 BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
+PROJECT_ROOT = BASE_DIR.parent.parent
+
+
+def _resolve_frontend_dir() -> Path:
+    """解析前端目录：环境变量优先，其次项目根 frontend/，最后回退包内 static/。
+
+    前端已从 Python 包中独立为顶层 ``frontend/`` 目录，供团队成员单独修改；
+    设置 ``TENDER_FRONTEND_DIR`` 可指向任意自定义前端目录。
+    """
+    override = os.environ.get("TENDER_FRONTEND_DIR", "")
+    if override:
+        return Path(override)
+    default = PROJECT_ROOT / "frontend"
+    if default.is_dir():
+        return default
+    return BASE_DIR / "static"
+
+
+STATIC_DIR = _resolve_frontend_dir()
 ALLOWED_SUFFIXES = {".docx", ".pdf", ".txt"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEFAULT_PORT = 8765
@@ -66,6 +91,7 @@ class Job:
         end = self.finished_at or time.time()
         return {
             "id": self.id,
+            "kind": "extract",
             "filename": self.filename,
             "status": self.status,
             "stage": self.stage,
@@ -81,6 +107,93 @@ class Job:
                 "draft": f"/api/jobs/{self.id}/download/draft" if self.draft else "",
             },
         }
+
+
+@dataclass
+class CompareJob:
+    """双文档比对任务：招标文件 + 投标文件 → 符合性比对结果。"""
+
+    id: str
+    tender_filename: str
+    bid_filename: str
+    use_llm: bool
+    status: str = "queued"          # queued | running | done | error
+    stage: str = "排队中"
+    error: str = ""
+    created_at: float = field(default_factory=time.time)
+    finished_at: float | None = None
+    payload: dict[str, Any] | None = None
+    summary: dict[str, Any] = field(default_factory=dict)
+
+    def public(self) -> dict[str, Any]:
+        end = self.finished_at or time.time()
+        return {
+            "id": self.id,
+            "kind": "compare",
+            "tender_filename": self.tender_filename,
+            "bid_filename": self.bid_filename,
+            "status": self.status,
+            "stage": self.stage,
+            "error": self.error,
+            "use_llm": self.use_llm,
+            "elapsed": round(max(0.0, end - self.created_at), 1),
+            "summary": self.summary,
+            "has_result": self.payload is not None,
+            "downloads": {},
+        }
+
+
+def _summarize_compare(payload: dict[str, Any]) -> dict[str, Any]:
+    results = payload.get("results") or []
+    counts = {"satisfied": 0, "partial": 0, "missing": 0}
+    for item in results:
+        verdict = item.get("verdict")
+        if verdict in counts:
+            counts[verdict] += 1
+    return {
+        "requirements": len(payload.get("requirements") or []),
+        "responses": len(payload.get("responses") or []),
+        "satisfied": counts["satisfied"],
+        "partial": counts["partial"],
+        "missing": counts["missing"],
+    }
+
+
+def _parse_multipart(body: bytes, boundary: str) -> dict[str, tuple[str, bytes]]:
+    """最小 multipart/form-data 解析：返回 name -> (filename, content)。
+
+    只处理文件/文本字段，够用即可；不引入第三方库。
+    """
+    delimiter = ("--" + boundary).encode("utf-8")
+    fields: dict[str, tuple[str, bytes]] = {}
+    for part in body.split(delimiter):
+        if not part or part.startswith(b"--"):
+            continue
+        part = part.lstrip(b"\r\n")
+        if not part:
+            continue
+        header_end = part.find(b"\r\n\r\n")
+        if header_end < 0:
+            continue
+        raw_headers = part[:header_end].decode("utf-8", errors="replace")
+        content = part[header_end + 4:]
+        if content.endswith(b"\r\n"):
+            content = content[:-2]
+
+        name = ""
+        filename = ""
+        for line in raw_headers.split("\r\n"):
+            if line.lower().startswith("content-disposition:"):
+                for segment in line.split(";"):
+                    segment = segment.strip()
+                    lower = segment.lower()
+                    if lower.startswith("name="):
+                        name = segment[5:].strip().strip('"')
+                    elif lower.startswith("filename="):
+                        filename = segment[9:].strip().strip('"')
+        if name:
+            fields[name] = (filename, content)
+    return fields
 
 
 def _unique_path(path: Path) -> Path:
@@ -134,7 +247,7 @@ class Service:
     """任务队列 + 结果缓存。抽取线程数等于并发上传数，由 ThreadingHTTPServer 拉起。"""
 
     def __init__(self, output_dir: Path | None = None) -> None:
-        self.jobs: dict[str, Job] = {}
+        self.jobs: dict[str, Job | CompareJob] = {}
         self.lock = threading.Lock()
         self.tmp_dir = Path(tempfile.mkdtemp(prefix="tender-web-"))
         self._output_dir = output_dir
@@ -219,7 +332,50 @@ class Service:
         threading.Thread(target=self._run, args=(job, target), daemon=True).start()
         return job
 
-    def get(self, job_id: str) -> Job | None:
+    def submit_compare(
+        self,
+        tender_filename: str,
+        tender_payload: bytes,
+        bid_filename: str,
+        bid_payload: bytes,
+        use_llm: bool,
+    ) -> CompareJob:
+        tender_suffix = Path(tender_filename).suffix.lower()
+        bid_suffix = Path(bid_filename).suffix.lower()
+        for label, suffix in (("招标文件", tender_suffix), ("投标文件", bid_suffix)):
+            if suffix not in ALLOWED_SUFFIXES:
+                raise ValueError(
+                    f"{label}类型不支持 {suffix or '（无扩展名）'}，仅支持 "
+                    + "、".join(sorted(ALLOWED_SUFFIXES))
+                )
+        if not tender_payload:
+            raise ValueError("招标文件内容为空")
+        if not bid_payload:
+            raise ValueError("投标文件内容为空")
+
+        job = CompareJob(
+            id=uuid.uuid4().hex,
+            tender_filename=Path(tender_filename).name or f"tender{tender_suffix}",
+            bid_filename=Path(bid_filename).name or f"bid{bid_suffix}",
+            use_llm=use_llm,
+        )
+        tender_target = self.tmp_dir / f"{job.id}-tender{tender_suffix}"
+        bid_target = self.tmp_dir / f"{job.id}-bid{bid_suffix}"
+        tender_target.write_bytes(tender_payload)
+        bid_target.write_bytes(bid_payload)
+
+        with self.lock:
+            self.jobs[job.id] = job
+            self._evict_locked()
+
+        threading.Thread(
+            target=self._run_compare,
+            args=(job, tender_target, bid_target),
+            daemon=True,
+        ).start()
+        return job
+
+    def get(self, job_id: str) -> Job | CompareJob | None:
         with self.lock:
             return self.jobs.get(job_id)
 
@@ -275,13 +431,75 @@ class Service:
             except OSError:
                 pass
 
+    def _run_compare(self, job: CompareJob, tender_path: Path, bid_path: Path) -> None:
+        """三阶段：抽招标要求 → 抽投标响应 → 逐条比对。"""
+        job.status = "running"
+        try:
+            from .bid_extract import BidResult, extract_bid_responses
+            from .compliance_matcher import match_qualifications, render_compliance_report
+            from .document import read_document
+            from .relation_extract import RelationResult, extract_relations
+
+            extractor = Extractor()
+            settings = extractor.settings
+            client = build_llm_client(settings.get("llm", {})) if job.use_llm else None
+
+            tender_doc = read_document(tender_path)
+            bid_doc = read_document(bid_path)
+
+            job.stage = "抽取招标文件资格要求"
+            relations = (
+                extract_relations(client, tender_doc, settings)
+                if client is not None
+                else RelationResult()
+            )
+
+            job.stage = "抽取投标文件响应条目"
+            bid_result = (
+                extract_bid_responses(client, bid_doc, settings)
+                if client is not None
+                else BidResult(responses=[], meta={})
+            )
+
+            job.stage = "逐条比对"
+            results = (
+                match_qualifications(
+                    client, bid_doc, relations.qualifications, bid_result.responses
+                )
+                if client is not None
+                else []
+            )
+
+            payload = {
+                "requirements": [item.to_dict() for item in relations.qualifications],
+                "responses": [item.to_dict() for item in bid_result.responses],
+                "results": [item.to_dict() for item in results],
+                "meta": {"relations": relations.meta, "bid": bid_result.meta},
+                "report": render_compliance_report(results),
+            }
+            job.payload = payload
+            job.summary = _summarize_compare(payload)
+            job.status = "done"
+            job.stage = "完成"
+        except Exception as exc:
+            job.status = "error"
+            job.stage = "失败"
+            job.error = f"{type(exc).__name__}: {exc}"
+        finally:
+            job.finished_at = time.time()
+            for path in (tender_path, bid_path):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
     def _resolve_output_dir(self) -> Path:
         if self._output_dir is not None:
             return self._output_dir
         configured = (self.settings().get("output") or {}).get("dir")
         if configured:
             return Path(configured)
-        return Path.cwd() / "结果审核报告"
+        return Path.cwd() / "data" / "结果审核报告"
 
     def _save(
         self,
@@ -325,6 +543,8 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         if path in {"/", "/index.html"}:
             return self._serve_index()
+        if path in {"/compare", "/compare.html"}:
+            return self._serve_static("compare.html")
         if path == "/api/health":
             return self._send_json(self.service.health())
         if path.startswith("/api/jobs/"):
@@ -333,6 +553,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/api/compare":
+            return self._handle_compare()
         if parsed.path != "/api/extract":
             return self._send_json({"error": "未找到该路径"}, 404)
 
@@ -360,14 +582,66 @@ class Handler(BaseHTTPRequestHandler):
         return self._send_json(job.public(), 202)
 
     # ------------------------------------------------------------------
+    # 双文档比对
+    # ------------------------------------------------------------------
+
+    def _handle_compare(self) -> None:
+        content_type = self.headers.get("Content-Type") or ""
+        match = re.search(r'boundary=(?:"([^"]+)"|([^;]+))', content_type)
+        if not match:
+            return self._send_json({"error": "需要使用 multipart/form-data 上传"}, 400)
+        boundary = (match.group(1) or match.group(2) or "").strip()
+        if not boundary:
+            return self._send_json({"error": "multipart boundary 缺失"}, 400)
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._send_json({"error": "Content-Length 无效"}, 400)
+        if length <= 0:
+            return self._send_json({"error": "请求体为空"}, 400)
+        if length > MAX_UPLOAD_BYTES * 2:
+            return self._send_json({"error": "两个文件合计超过上限"}, 413)
+
+        body = self.rfile.read(length)
+        fields = _parse_multipart(body, boundary)
+        tender = fields.get("tender")
+        bid = fields.get("bid")
+        if not tender or not tender[1]:
+            return self._send_json({"error": "缺少招标文件（字段名 tender）"}, 400)
+        if not bid or not bid[1]:
+            return self._send_json({"error": "缺少投标文件（字段名 bid）"}, 400)
+
+        use_llm = True
+        raw_flag = fields.get("use_llm")
+        if raw_flag:
+            flag = raw_flag[1].decode("utf-8", errors="replace").strip().lower()
+            use_llm = flag not in {"0", "false", "no"}
+
+        try:
+            job = self.service.submit_compare(
+                tender[0] or "tender.docx",
+                tender[1],
+                bid[0] or "bid.docx",
+                bid[1],
+                use_llm,
+            )
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 400)
+        return self._send_json(job.public(), 202)
+
+    # ------------------------------------------------------------------
     # 静态页与任务接口
     # ------------------------------------------------------------------
 
     def _serve_index(self) -> None:
-        index = STATIC_DIR / "index.html"
-        if not index.is_file():
-            return self._send_json({"error": f"缺少前端文件：{index}"}, 500)
-        body = index.read_bytes()
+        self._serve_static("index.html")
+
+    def _serve_static(self, name: str) -> None:
+        target = STATIC_DIR / name
+        if not target.is_file():
+            return self._send_json({"error": f"缺少前端文件：{target}"}, 500)
+        body = target.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -387,15 +661,22 @@ class Handler(BaseHTTPRequestHandler):
         action = parts[3] if len(parts) > 3 else ""
         if action == "":
             return self._send_json(job.public())
+        if action == "compare":
+            payload = getattr(job, "payload", None)
+            if payload is None:
+                return self._send_json({"error": "任务尚未完成"}, 409)
+            return self._send_json(payload)
         if action == "result":
-            if job.result is None:
+            if isinstance(job, CompareJob) or job.result is None:
                 return self._send_json({"error": "任务尚未完成"}, 409)
             return self._send_json(job.result)
         if action == "report":
-            if not job.report:
+            if isinstance(job, CompareJob) or not job.report:
                 return self._send_json({"error": "任务尚未完成"}, 409)
             return self._send_json({"markdown": job.report})
         if action == "download" and len(parts) > 4:
+            if isinstance(job, CompareJob):
+                return self._send_json({"error": "该任务不支持下载"}, 404)
             return self._download(job, parts[4])
         self._send_json({"error": "未找到该路径"}, 404)
 
@@ -452,6 +733,7 @@ def serve(
 
     url = f"http://{host}:{port}/"
     print(f"[web] 已启动：{url}")
+    print(f"[web] 双文档比对：{url}compare")
     print("[web] 文档只在本机处理；按 Ctrl+C 停止")
     if open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()

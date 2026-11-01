@@ -16,16 +16,18 @@ DOCX 解析 → 文档类型校验（非招标/采购文件则提示并跳过）
 
 ```
 招标需求解析组件/
-├── 采购需求样本/          # 输入样本 .docx
-├── 结果审核报告/          # 输出：-结果.json / -审核报告.md / -平台草稿.json
-├── examples/              # 使用示例（extract_demo.py）
-├── scripts/               # 启动脚本（launch.py，供 start.bat 调用）
 ├── src/
-│   └── tender_extractor/  # 核心包
+│   └── tender_extractor/  # 后端抽取引擎（核心包）
 │       ├── config/        #   fields.json（字段定义）、settings.json（运行配置）
-│       ├── static/        #   index.html（Web 界面，单文件内联 CSS/JS）
-│       └── *.py           #   核心模块（cli/document/pipeline/llm_*/report/...）
+│       └── *.py           #   核心模块（cli/document/pipeline/llm_*/report/web/...）
+├── frontend/              # 前端模块（独立目录，团队成员可单独修改，见 frontend/README.md）
+├── templates/             # 招标文件标准模板（广东省政府采购公开招标标准模板.docx）
+├── data/                  # 本地数据，不进 git：采购需求样本 / 结果审核报告 / 投标文件
+├── samples/               # 脱敏样本（进 git，见 samples/README.md）
+├── examples/              # 使用示例（extract_demo.py）
+├── scripts/               # 工具脚本（launch.py 启动器、inspect_template.py、演示脚本）
 ├── tests/                 # 单元测试（pytest）
+├── docs/                  # GitHub Pages 项目展示页
 ├── pyproject.toml         # 项目元数据与依赖
 ├── README.md              # 本文档
 └── start.bat              # Windows 一键启动

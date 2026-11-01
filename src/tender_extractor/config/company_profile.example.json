@@ -1,0 +1,115 @@
+{
+  "company": {
+    "name": "广州安泰保安服务有限公司",
+    "credit_code": "91440101MA5CX8XXXX",
+    "registered_capital": "1000 万元人民币",
+    "founded": "2015-03-12",
+    "address": "广州市天河区天河路 385 号 12 楼",
+    "legal_person": "张伟",
+    "contact_name": "李强",
+    "contact_phone": "138-0000-1234",
+    "business_scope": "门卫、巡逻、守护、随身护卫、安全检查、安全技术防范、安全风险评估、物业管理、停车场经营。"
+  },
+  "qualifications": [
+    {
+      "name": "保安服务许可证",
+      "certificate_no": "粤公保服字〔2015〕第 0186 号",
+      "issuer": "广东省公安厅",
+      "valid_until": "2027-06-30",
+      "evidence": "资质证书/保安服务许可证.pdf"
+    },
+    {
+      "name": "ISO9001 质量管理体系认证",
+      "certificate_no": "00125Q31280R0M",
+      "issuer": "中国质量认证中心",
+      "valid_until": "2027-12-31",
+      "evidence": "资质证书/ISO9001.pdf"
+    },
+    {
+      "name": "ISO14001 环境管理体系认证",
+      "certificate_no": "00125E20871R0M",
+      "issuer": "中国质量认证中心",
+      "valid_until": "2027-12-31",
+      "evidence": "资质证书/ISO14001.pdf"
+    },
+    {
+      "name": "ISO45001 职业健康安全管理体系认证",
+      "certificate_no": "00125S11642R0M",
+      "issuer": "中国质量认证中心",
+      "valid_until": "2027-12-31",
+      "evidence": "资质证书/ISO45001.pdf"
+    },
+    {
+      "name": "劳务派遣经营许可证",
+      "certificate_no": "粤劳派字第 44010620180037 号",
+      "issuer": "广州市天河区人力资源和社会保障局",
+      "valid_until": "2026-12-31",
+      "evidence": "资质证书/劳务派遣许可证.pdf"
+    }
+  ],
+  "performances": [
+    {
+      "project_name": "广州天河体育中心安保服务采购项目",
+      "amount": "862 万元",
+      "year": "2023",
+      "client": "广州天河体育中心",
+      "evidence": "业绩证明/天河体育中心合同.pdf"
+    },
+    {
+      "project_name": "广州国际会展中心展会安保服务项目",
+      "amount": "516 万元",
+      "year": "2024",
+      "client": "广州国际会展中心",
+      "evidence": "业绩证明/会展中心合同.pdf"
+    },
+    {
+      "project_name": "广州市天河区政务服务中心安保服务项目",
+      "amount": "328 万元",
+      "year": "2022",
+      "client": "天河区政务服务中心",
+      "evidence": "业绩证明/政务中心合同.pdf"
+    }
+  ],
+  "personnel": [
+    {
+      "name": "王强",
+      "role": "项目负责人",
+      "title": "高级保安师",
+      "certificate": "保安员证（三级）",
+      "years": 12
+    },
+    {
+      "name": "陈明",
+      "role": "现场主管",
+      "title": "保安师",
+      "certificate": "保安员证（二级）",
+      "years": 8
+    },
+    {
+      "name": "刘芳",
+      "role": "安全技术防范工程师",
+      "title": "中级工程师",
+      "certificate": "安全防范系统安装维护员",
+      "years": 6
+    }
+  ],
+  "statements": {
+    "no_violation": "我公司参加本次政府采购活动前 3 年内，在经营活动中没有重大违法记录。",
+    "sme": "我公司属于小型企业，从业人员 186 人，上一年度营业收入 4380 万元，资产总额 2610 万元。",
+    "no_consortium": "我公司不组成联合体参加本项目投标。",
+    "credit": "我公司未被列入“信用中国”网站记录失信被执行人或重大税收违法失信主体名单。"
+  },
+  "evidence_index": {
+    "business_license": "证照/营业执照副本.pdf",
+    "tax_record": "证照/近6个月纳税证明.pdf",
+    "social_insurance": "证照/近6个月社保缴纳证明.pdf",
+    "financial_report": "财务/2025年度审计报告.pdf",
+    "equipment": "技术/主要设备清单.xlsx",
+    "no_violation": "声明函/无重大违法记录声明.pdf",
+    "credit_check": "证照/信用中国查询截图.pdf",
+    "sme": "声明函/中小企业声明函.pdf",
+    "no_consortium": "声明函/非联合体投标声明.pdf",
+    "security_license": "资质证书/保安服务许可证.pdf",
+    "bid_letter": "投标函/投标函及法定代表人授权书.pdf"
+  }
+}

@@ -32,3 +32,13 @@ settings.local.json
 *.swp
 Thumbs.db
 desktop.ini
+
+# 本地数据：真实采购样本、抽取输出、投标文件（含真实单位信息，勿提交）
+data/
+
+# 参赛材料（含个人信息，勿提交）
+参赛材料/
+
+# 临时文件
+*.tmp
+*.log

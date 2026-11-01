@@ -3,7 +3,7 @@
     "enabled": true,
     "provider": "ollama",
     "base_url": "http://127.0.0.1:11434",
-    "model": "qwen2.5:3b-instruct",
+    "model": "qwen2.5:7b-instruct-q4_K_M",
     "api_key": "",
     "api_key_env": "TENDER_EXTRACTOR_API_KEY",
     "timeout_seconds": 180,
@@ -40,7 +40,7 @@
     "document_type_threshold": 4.0
   },
   "output": {
-    "dir": "D:/ClaudeCode/招标需求解析组件/结果审核报告",
+    "dir": "D:/ClaudeCode/招标需求解析组件/data/结果审核报告",
     "include_cleaned_text": false
   }
 }

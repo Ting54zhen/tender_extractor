@@ -16,7 +16,7 @@ from .pipeline import Extractor
 from .report import render_markdown
 from .reviewer import resolve_settings
 
-DEFAULT_OUTPUT_DIR = Path("D:/ClaudeCode/招标需求解析组件/结果审核报告")
+DEFAULT_OUTPUT_DIR = Path("D:/ClaudeCode/招标需求解析组件/data/结果审核报告")
 
 
 def _resolve_output_dir(args: argparse.Namespace, settings: dict) -> Path:
