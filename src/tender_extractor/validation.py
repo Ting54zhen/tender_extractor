@@ -26,6 +26,7 @@ from .cleaning import (
     parse_money,
     parse_number,
     parse_percent,
+    split_phones,
 )
 from .models import Document, FieldValue
 
@@ -106,10 +107,13 @@ def normalize_value(field_def: dict[str, Any], raw: Any) -> tuple[Any, list[str]
         return value or raw_text, notes
 
     if field_type == "phone":
-        phone = normalize_phone(raw_text)
-        if phone and phone != raw_text:
-            notes.append(f"电话归一化：{raw_text} -> {phone}")
-        return phone or raw_text, notes
+        phones = split_phones(raw_text)
+        if not phones:
+            return raw_text, notes
+        phone_text = "、".join(phones)
+        if phone_text != raw_text:
+            notes.append(f"电话归一化：{raw_text} -> {phone_text}")
+        return phone_text, notes
 
     # text
     text = raw_text.strip()
@@ -165,7 +169,7 @@ def validate_field(field_def: dict[str, Any], value: Any) -> tuple[list[str], li
         if allowed and value not in allowed:
             errors.append(f"{label}不在允许值 {allowed} 中：{value}")
     elif field_type == "phone":
-        if normalize_phone(value) is None:
+        if not split_phones(value):
             errors.append(f"{label}不是有效电话：{value}")
 
     if key == "purchaser":

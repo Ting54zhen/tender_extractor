@@ -244,15 +244,42 @@ def parse_date(value: Any) -> str | None:
     return f"{year:04d}-{month:02d}-{day:02d}"
 
 
+#: 电话形态：手机号 / 带区号固话 / 无区号本地固话（8 位，如 28866118）
+_PHONE_PATTERN = (
+    r"(?:(?:\+?86[-\s]?)?1[3-9]\d{9}"
+    r"|0\d{2,3}[-\s]?\d{7,8}(?:[-\s]?\d{1,6})?"
+    r"|\d{8})"
+)
+_PHONE_RE = re.compile(_PHONE_PATTERN)
+#: 多号码分隔符（招标文件常见「28866118、28866163」）
+_PHONE_SPLIT_RE = re.compile(r"[、,，;；/|]+")
+
+
 def normalize_phone(value: Any) -> str | None:
     text = unicodedata.normalize("NFKC", str(value or ""))
-    match = re.search(
-        r"(?:(?:\+?86[-\s]?)?1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8}(?:[-\s]?\d{1,6})?)",
-        text,
-    )
+    match = _PHONE_RE.search(text)
     if not match:
         return None
     return re.sub(r"\s+", "", match.group(0))
+
+
+def split_phones(value: Any) -> list[str]:
+    """拆分并归一化多个电话号码，任一号码无效则返回空列表。
+
+    招标文件的联系方式常写成「28866118、28866163」，需要逐个校验而不是
+    整体判断，否则合法号码会因分隔符被判无效。
+    """
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    parts = [part.strip() for part in _PHONE_SPLIT_RE.split(text) if part.strip()]
+    if not parts:
+        return []
+    phones: list[str] = []
+    for part in parts:
+        phone = normalize_phone(part)
+        if phone is None:
+            return []
+        phones.append(phone)
+    return phones
 
 
 def normalize_enum(value: Any, enum_name: str) -> str | None:

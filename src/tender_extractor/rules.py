@@ -224,6 +224,52 @@ def _candidate_from_kvs(
     )
 
 
+# 「3.项目联系方式」这类小标题下的「电话：xxx」才是项目联系电话。
+_PROJECT_PHONE_HEADINGS = {
+    "项目联系方式",
+    "代理机构项目联系方式",
+    "采购代理机构项目联系方式",
+}
+_PROJECT_PHONE_LINE_RE = re.compile(
+    r"^\s*(?:电话|联系电话|联系方式|项目联系电话)\s*[：:]\s*(.+?)\s*$"
+)
+
+
+def _extract_project_phone_from_heading(blocks: Iterable[Block]) -> Candidate | None:
+    """用标题层级消歧项目联系电话。
+
+    联系方式章节通常先出现采购人/代理机构的总机（标签只写「联系方式」），
+    仅靠标签相似度会把总机误当成项目电话（「联系方式」是「项目联系方式」
+    的子串，弱匹配即可越线）。这里定位小标题，取其后面几行内的电话行，
+    命中时优先级高于别名匹配。
+    """
+    block_list = list(blocks)
+    for index, block in enumerate(block_list):
+        if block.is_table:
+            continue
+        title = normalize_for_match(strip_numbering(block.text))
+        if title not in _PROJECT_PHONE_HEADINGS:
+            continue
+        for following in block_list[index + 1 : index + 4]:
+            if following.is_table:
+                continue
+            match = _PROJECT_PHONE_LINE_RE.match(following.text)
+            if not match:
+                continue
+            value = clean_text(match.group(1))
+            if not value or is_placeholder(value):
+                continue
+            return _candidate(
+                value=value,
+                confidence=0.9,
+                source="label",
+                block=following,
+                quote=match.group(0),
+                note="项目联系方式小标题下的电话行",
+            )
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 表格定位
 # ---------------------------------------------------------------------------
@@ -925,6 +971,11 @@ def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutp
     # 并优先于下面的别名匹配（“技术部分”在评分表里还会指向某个评审项）。
     for key, score_candidate in _extract_scores(doc).items():
         output.candidates.setdefault(key, score_candidate)
+
+    # 项目联系方式优先按小标题层级判定，避免被采购人/代理机构总机带偏。
+    project_phone = _extract_project_phone_from_heading(doc.blocks)
+    if project_phone:
+        output.candidates["agency_project_phone"] = project_phone
 
     for key, aliases in {
         "purchaser_address": ["采购人地址", "采购单位地址"],
