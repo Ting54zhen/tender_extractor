@@ -1,6 +1,7 @@
 # 招标需求解析组件（tender-extractor）
 
-面向招标平台后端的关键信息抽取部件：输入采购需求报告（.docx / .pdf / .txt），输出**结构化字段 JSON**，由平台自己的表单或模板渲染层完成回填。组件**不修改 Word 文件**。
+输入采购需求报告（.docx / .pdf / .txt），输出**结构化字段 JSON**、**审核报告**与**完整招标文件 .docx**。
+既可作为招标平台后端的关键信息抽取部件（由平台的表单/模板渲染层完成回填），也可直接生成可编辑的招标文件初稿。
 
 处理链路：
 
@@ -10,6 +11,7 @@ DOCX 解析 → 文档类型校验（非招标/采购文件则提示并跳过）
           → 数据清洗/归一化 → 字段与跨字段校验
           → 校验错误 + 原文证据回喂 LLM 修复（最多 2 轮）
           → 复核清单 + 审计信息 + 模板占位符映射
+          → （可选）招标文件渲染：compiled 模板 + 字段回填 → 完整 .docx
 ```
 
 ## 项目结构
@@ -32,6 +34,8 @@ DOCX 解析 → 文档类型校验（非招标/采购文件则提示并跳过）
 ├── README.md              # 本文档
 └── start.bat              # Windows 一键启动
 ```
+
+> 各目录与文件的详细职责、数据安全约定、分支与接口变更流程，见 **[DEVELOPMENT.md](DEVELOPMENT.md)**。
 
 > `src/*.egg-info/` 与各目录下的 `__pycache__/` 是安装/运行自动生成的产物，已在 `.gitignore` 中忽略，无需手动管理。
 
@@ -60,6 +64,7 @@ DOCX 解析 → 文档类型校验（非招标/采购文件则提示并跳过）
 | `pipeline.py` | 编排核心 `Extractor`：解析→规则→LLM→合并→校验→回喂→结构化输出 |
 | `platform_adapter.py` | 平台适配层，把抽取结果转成科瑞招标平台 AI 草稿 JSON |
 | `report.py` | 把抽取结果渲染成人工审核用的 Markdown 报告 |
+| `doc_generator.py` | 招标文件生成：抽取结果 + compiled 模板 → 完整 `.docx`，缺失字段标记「待补充」 |
 | `web.py` | 本地标准库 Web 服务，上传文档并轮询查看字段/复核/报告 |
 
 ### 配置文件（`src/tender_extractor/config/`）
@@ -108,6 +113,7 @@ DOCX 解析 → 文档类型校验（非招标/采购文件则提示并跳过）
 - **清洗后回喂**：金额、日期、比例、电话、枚举等先归一化；校验失败时把错误原因、允许值和原文片段一起回喂模型，只接受“能回链且通过校验”的修复。
 - **冲突显式化**：规则与模型取值不一致时保留双方候选并标记 `conflict`，不静默覆盖。
 - **模板映射**：`template_values` 以中文占位符名为 key，直接对应标准招标文件模板中的 `{项目名称}`、`{预算金额}` 等。
+- **招标文件生成**：`generate` 命令把抽取结果回填进标准模板，直接产出可编辑的完整 `.docx`；缺失字段标记「待补充」而不编造，真实样本实测填充率 87%。
 - **可审计**：输出 `meta`、`audit`、`review`，记录模型、耗时、调用统计、修复轮次和复核优先级。
 
 ## 2. 快速开始
@@ -125,14 +131,15 @@ start.bat
 也可以跳过菜单，直接透传 CLI 参数：
 
 ```bat
-start.bat extract "采购需求样本\1.docx"
-start.bat extract "采购需求样本\1.docx" --no-llm
+start.bat extract "data\采购需求样本\1.docx"
+start.bat extract "data\采购需求样本\1.docx" --no-llm
+start.bat generate "data\采购需求样本\1.docx"     # 生成完整招标文件 .docx
 start.bat health
 start.bat setup --pdf
 start.bat test
 ```
 
-结果仍写入 `结果审核报告/`。需要自己管理环境时，按 2.2 手动安装。
+结果写入 `data/结果审核报告/`（`-结果.json` / `-审核报告.md` / `-招标文件.docx`）。需要自己管理环境时，按 2.2 手动安装。
 
 ### 2.2 安装
 
@@ -144,7 +151,7 @@ python -m pip install -e ".[pdf]"
 python -m pip install -e ".[dev]"
 ```
 
-要求 Python 3.10+。核心依赖只有 `python-docx`（MIT）。
+要求 Python 3.10+。核心依赖 `python-docx`（MIT）与 `docxtpl`（模板渲染，LGPL-2.1）。
 
 ### 2.3 准备本地模型
 

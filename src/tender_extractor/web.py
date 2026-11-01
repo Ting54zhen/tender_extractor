@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
+from .doc_generator import generate_tender_document
 from .llm_client import build_llm_client
 from .pipeline import Extractor
 from .platform_adapter import PlatformRecognitionError, to_platform_draft
@@ -86,6 +87,7 @@ class Job:
     json_path: Path | None = None
     md_path: Path | None = None
     draft_path: Path | None = None
+    result_obj: Any = None          # ExtractionResult 对象，供生成器使用（不参与序列化）
 
     def public(self) -> dict[str, Any]:
         end = self.finished_at or time.time()
@@ -254,6 +256,7 @@ class Service:
         self._settings: dict[str, Any] | None = None
         self._health: dict[str, Any] | None = None
         self._health_at = 0.0
+        self._groups: list[dict[str, Any]] | None = None
 
     # ------------------------------------------------------------------
     # 配置与健康检查
@@ -294,6 +297,92 @@ class Service:
             self._health = data
             self._health_at = now
         return data
+
+    # ------------------------------------------------------------------
+    # 填写工作台：字段分组与招标文件生成
+    # ------------------------------------------------------------------
+
+    def field_groups(self) -> list[dict[str, Any]]:
+        """字段分组定义（来自 fields.json），供填写工作台渲染。"""
+        if self._groups is None:
+            try:
+                config = json.loads(
+                    (BASE_DIR / "config" / "fields.json").read_text(encoding="utf-8")
+                )
+                groups: list[dict[str, Any]] = []
+                for key, group in (config.get("groups") or {}).items():
+                    groups.append(
+                        {
+                            "key": key,
+                            "label": group.get("label", key),
+                            "fields": list(group.get("fields") or []),
+                        }
+                    )
+                self._groups = groups
+            except Exception:
+                self._groups = []
+        return self._groups
+
+    def job_fields(self, job: Job) -> dict[str, Any] | None:
+        """按分组整理抽取结果，供「AI 建议 + 人工拍板」工作台使用。"""
+        if isinstance(job, CompareJob) or job.result is None:
+            return None
+        raw_fields = job.result.get("fields") or {}
+        groups: list[dict[str, Any]] = []
+        total = 0
+        missing = 0
+        for group in self.field_groups():
+            items: list[dict[str, Any]] = []
+            for key in group["fields"]:
+                data = raw_fields.get(key)
+                if not data:
+                    continue
+                item = {
+                    "key": data.get("key", key),
+                    "label": data.get("label", key),
+                    "template": (data.get("template") or "").strip(),
+                    "value": data.get("value"),
+                    "confidence": data.get("confidence", 0.0),
+                    "status": data.get("status", "missing"),
+                    "source": data.get("source", ""),
+                    "evidence": [
+                        {"quote": ev.get("quote", ""), "section": ev.get("section", "")}
+                        for ev in (data.get("evidence") or [])
+                    ],
+                    "errors": data.get("errors") or [],
+                    "warnings": data.get("warnings") or [],
+                    "notes": data.get("notes") or "",
+                }
+                items.append(item)
+                total += 1
+                if item["value"] in (None, ""):
+                    missing += 1
+            if items:
+                groups.append(
+                    {"key": group["key"], "label": group["label"], "items": items}
+                )
+        return {"groups": groups, "total": total, "missing": missing}
+
+    def generate_document(
+        self,
+        job: Job,
+        values: dict[str, Any],
+        missing_mode: str = "mark",
+    ) -> Path:
+        """用用户确认后的值渲染招标文件，返回输出路径。"""
+        if job.result_obj is None:
+            raise ValueError("该任务没有可用的抽取结果，无法生成招标文件")
+        stem = Path(job.filename).stem or "招标文件"
+        output_dir = self._output_dir or (Path("data") / "结果审核报告")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        target = _unique_path(output_dir / f"{stem}-招标文件.docx")
+        generated = generate_tender_document(
+            job.result_obj,
+            output_path=target,
+            missing_mode=missing_mode,
+            overrides=values,
+        )
+        return generated.output_path
 
     # ------------------------------------------------------------------
     # 任务
@@ -411,6 +500,7 @@ class Service:
                 except Exception:
                     draft = None
 
+            job.result_obj = result
             job.result = data
             job.report = report
             job.draft = draft
@@ -545,6 +635,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_index()
         if path in {"/compare", "/compare.html"}:
             return self._serve_static("compare.html")
+        if path in {"/fill", "/fill.html"}:
+            return self._serve_static("fill.html")
         if path == "/api/health":
             return self._send_json(self.service.health())
         if path.startswith("/api/jobs/"):
@@ -555,6 +647,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/compare":
             return self._handle_compare()
+        if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/generate"):
+            return self._handle_generate(parsed.path)
         if parsed.path != "/api/extract":
             return self._send_json({"error": "未找到该路径"}, 404)
 
@@ -666,6 +760,11 @@ class Handler(BaseHTTPRequestHandler):
             if payload is None:
                 return self._send_json({"error": "任务尚未完成"}, 409)
             return self._send_json(payload)
+        if action == "fields":
+            payload = self.service.job_fields(job)
+            if payload is None:
+                return self._send_json({"error": "任务尚未完成"}, 409)
+            return self._send_json(payload)
         if action == "result":
             if isinstance(job, CompareJob) or job.result is None:
                 return self._send_json({"error": "任务尚未完成"}, 409)
@@ -679,6 +778,62 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"error": "该任务不支持下载"}, 404)
             return self._download(job, parts[4])
         self._send_json({"error": "未找到该路径"}, 404)
+
+    def _handle_generate(self, path: str) -> None:
+        """接收用户确认的字段值，生成招标文件并直接下载。"""
+        parts = [item for item in path.split("/") if item]
+        if len(parts) < 4:
+            return self._send_json({"error": "无效的任务路径"}, 400)
+        job = self.service.get(parts[2])
+        if job is None:
+            return self._send_json({"error": "任务不存在或已过期"}, 404)
+        if isinstance(job, CompareJob):
+            return self._send_json({"error": "比对任务不支持生成招标文件"}, 400)
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._send_json({"error": "Content-Length 无效"}, 400)
+        body: dict[str, Any] = {}
+        if length > 0:
+            try:
+                body = json.loads(self.rfile.read(length).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return self._send_json({"error": "请求体不是合法 JSON"}, 400)
+        if not isinstance(body, dict):
+            return self._send_json({"error": "请求体必须是 JSON 对象"}, 400)
+
+        values = body.get("values") or {}
+        if not isinstance(values, dict):
+            return self._send_json({"error": "values 必须是对象"}, 400)
+        missing_mode = body.get("missing_mode") or "mark"
+        if missing_mode not in {"mark", "empty"}:
+            return self._send_json({"error": "missing_mode 只能是 mark 或 empty"}, 400)
+
+        try:
+            target = self.service.generate_document(job, values, missing_mode)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 409)
+        except FileNotFoundError as exc:
+            return self._send_json({"error": str(exc)}, 500)
+        except Exception as exc:  # 渲染异常统一兜底，避免服务线程崩溃
+            return self._send_json({"error": f"生成失败：{exc}"}, 500)
+
+        data = target.read_bytes()
+        self.send_response(200)
+        self.send_header(
+            "Content-Type",
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document",
+        )
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header(
+            "Content-Disposition",
+            "attachment; filename*=UTF-8''" + quote(target.name),
+        )
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _download(self, job: Job, kind: str) -> None:
         targets = {

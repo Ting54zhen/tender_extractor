@@ -230,6 +230,7 @@
         <button class="btn small" id="dl-json">下载结果 JSON</button>
         <button class="btn small" id="dl-md">下载审核报告</button>
         <button class="btn small hidden" id="dl-draft">下载平台草稿</button>
+        <button class="btn small primary hidden" id="go-fill">去填写招标文件 →</button>
         <div class="spacer"></div>
         <span class="hintline" id="result-meta"></span>
       </div>
@@ -432,9 +433,20 @@
       fetch("/api/jobs/" + job.id + "/report").then(function (r) { return r.json(); })
     ]).then(function (pair) {
       render(job, pair[0], pair[1].markdown || "");
+      bindGoFill(job);
     }).catch(function (err) {
       showError("读取结果失败：" + (err.message || err));
     });
+  }
+
+  // 抽取成功后在工具栏露出「去填写招标文件」入口
+  function bindGoFill(job) {
+    var btn = $("go-fill");
+    var ok = job.status === "done" && !(job.summary && job.summary.skipped);
+    btn.classList.toggle("hidden", !ok);
+    btn.onclick = ok ? function () {
+      window.location.href = "/fill.html?job=" + job.id;
+    } : null;
   }
 
   // ---------------- 渲染 ----------------

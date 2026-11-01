@@ -32,6 +32,7 @@ USAGE = """招标需求解析组件 · 快速启动
   start.bat                            进入交互菜单
   start.bat extract "文件.docx"        抽取（完整链路）
   start.bat extract "文件.docx" --no-llm
+  start.bat generate "文件.docx"       生成完整招标文件（.docx）
   start.bat health                     检查模型服务
   start.bat inspect "文件.docx"        只看解析结构
   start.bat setup [--pdf] [--dev]      只准备环境
@@ -353,7 +354,7 @@ def main(argv: list[str]) -> int:
         if not ensure_env():
             return 1
         return do_web(rest)
-    if command in {"extract", "inspect", "health"}:
+    if command in {"extract", "inspect", "health", "generate"}:
         if not ensure_env():
             return 1
         return run_cli(argv, report_output=command == "extract")

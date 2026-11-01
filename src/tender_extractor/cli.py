@@ -10,6 +10,7 @@ import json
 import sys
 from pathlib import Path
 
+from .doc_generator import generate_tender_document
 from .document import read_document
 from .llm_client import build_llm_client
 from .pipeline import Extractor
@@ -158,6 +159,51 @@ def cmd_extract(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_generate(args: argparse.Namespace) -> int:
+    """解析需求报告并渲染成完整招标文件（.docx）。"""
+    extractor = Extractor(
+        config_dir=args.config_dir,
+        settings_override=_build_overrides(args),
+    )
+    result = extractor.extract(
+        args.input,
+        use_llm=not args.no_llm,
+        allow_non_tender=args.allow_non_tender,
+    )
+    data = result.to_dict()
+    if data["meta"].get("extraction_skipped"):
+        reason = data["meta"].get("reject_reason", "")
+        print(f"[tender-generator] 已跳过：{reason}", file=sys.stderr)
+        print(
+            "[tender-generator] 如确认仍需生成，请加 --allow-non-tender",
+            file=sys.stderr,
+        )
+        return 3
+
+    try:
+        generated = generate_tender_document(
+            result,
+            template_path=args.template,
+            output_path=args.output,
+            missing_mode=args.missing,
+        )
+    except FileNotFoundError as exc:
+        print(f"[tender-generator] {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"[tender-generator] 填充 {len(generated.filled)}/{generated.total}"
+        f"（{generated.fill_rate:.0%}），缺失 {len(generated.missing)} 项",
+        file=sys.stderr,
+    )
+    if generated.missing:
+        preview = "、".join(generated.missing[:8])
+        suffix = f" 等 {len(generated.missing)} 项" if len(generated.missing) > 8 else ""
+        print(f"[tender-generator] 待补充：{preview}{suffix}", file=sys.stderr)
+    print(f"[tender-generator] 招标文件: {generated.output_path}", file=sys.stderr)
+    return 0
+
+
 def cmd_inspect(args: argparse.Namespace) -> int:
     doc = read_document(args.input)
     payload = {
@@ -287,6 +333,35 @@ def build_parser() -> argparse.ArgumentParser:
     inspect = sub.add_parser("inspect", help="只看解析后的章节/表格结构")
     inspect.add_argument("input")
     inspect.set_defaults(func=cmd_inspect)
+
+    generate = sub.add_parser("generate", help="解析需求报告并生成完整招标文件（.docx）")
+    generate.add_argument("input", help="需求报告路径（.docx/.pdf/.txt）")
+    generate.add_argument(
+        "-o",
+        "--output",
+        help="输出 .docx 路径；不填则写入 data/结果审核报告/，文件名为「输入名-招标文件.docx」",
+    )
+    generate.add_argument(
+        "--template",
+        help="compiled 模板路径；默认 templates/compiled/ 下的广东省标准模板",
+    )
+    generate.add_argument(
+        "--missing",
+        choices=["mark", "empty"],
+        default="mark",
+        help="缺失字段处理：mark=标记「待补充」（默认），empty=留空",
+    )
+    generate.add_argument("--no-llm", action="store_true", help="只用规则，不调用本地模型")
+    generate.add_argument(
+        "--allow-non-tender",
+        action="store_true",
+        help="跳过文档类型检查，强制生成",
+    )
+    generate.add_argument("--config-dir", help="配置目录（fields.json/settings.json）")
+    generate.add_argument("--provider", help="模型接入方式：ollama（默认）或 openai")
+    generate.add_argument("--model", help="模型名，例如 qwen2.5:3b-instruct")
+    generate.add_argument("--base-url", help="服务地址，默认 http://127.0.0.1:11434")
+    generate.set_defaults(func=cmd_generate)
 
     health = sub.add_parser("health", help="检查模型服务（Ollama 或 API）是否可用")
     health.add_argument("--provider", help="ollama（默认）或 openai")

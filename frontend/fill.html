@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>招标文件填写工作台</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --line: #e5e7eb;
+    --text: #111827;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-soft: #eff6ff;
+    --green: #059669;
+    --green-soft: #ecfdf5;
+    --amber: #b45309;
+    --amber-soft: #fffbeb;
+    --red: #dc2626;
+    --red-soft: #fef2f2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 18px 20px 80px; }
+
+  /* 顶部栏 */
+  header.top {
+    position: sticky; top: 0; z-index: 20; background: rgba(245,246,248,.94);
+    backdrop-filter: blur(6px); border-bottom: 1px solid var(--line);
+    padding: 12px 0; margin-bottom: 16px;
+  }
+  .top-inner { max-width: 1320px; margin: 0 auto; padding: 0 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .brand h1 { margin: 0; font-size: 17px; }
+  .brand p { margin: 1px 0 0; color: var(--muted); font-size: 12px; word-break: break-all; }
+  .progress { flex: 1; min-width: 180px; }
+  .progress .bar { height: 7px; background: #e8eaee; border-radius: 99px; overflow: hidden; }
+  .progress .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #2563eb, #059669); transition: width .25s; }
+  .progress .txt { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .btn {
+    border: 1px solid var(--line); background: #fff; color: var(--text);
+    padding: 8px 14px; border-radius: 9px; cursor: pointer; font-size: 13.5px;
+    transition: .15s; white-space: nowrap;
+  }
+  .btn:hover { border-color: #cbd5e1; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .btn.primary:hover { background: #1d4ed8; }
+  .btn.primary:disabled { background: #93b4f5; border-color: #93b4f5; cursor: not-allowed; }
+  .btn.ghost { background: transparent; }
+  .btn.small { padding: 4px 10px; font-size: 12.5px; border-radius: 7px; }
+
+  /* 布局 */
+  .app { display: grid; grid-template-columns: 216px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 920px) { .app { grid-template-columns: 1fr; } .nav { position: static !important; } }
+
+  /* 左侧导航 */
+  .nav {
+    position: sticky; top: 96px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px;
+  }
+  .nav h2 { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); font-weight: 600; letter-spacing: .4px; }
+  .nav a {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 8px 10px; border-radius: 8px; color: var(--text); text-decoration: none; font-size: 13px;
+  }
+  .nav a:hover { background: #f3f4f6; }
+  .nav a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .nav a .count { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  .nav a.active .count { color: var(--accent); }
+
+  /* 工具栏 */
+  .toolbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; margin-bottom: 14px;
+  }
+  .toolbar .seg { display: inline-flex; background: #f3f4f6; border-radius: 9px; padding: 3px; }
+  .toolbar .seg button {
+    border: none; background: none; padding: 5px 11px; border-radius: 7px; cursor: pointer;
+    font-size: 12.5px; color: var(--muted);
+  }
+  .toolbar .seg button.on { background: #fff; color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  .toolbar .spacer { flex: 1; }
+  .toolbar select { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; background: #fff; font-size: 12.5px; color: #374151; }
+
+  /* 字段卡片 */
+  section.group { margin-bottom: 22px; }
+  section.group > h3 {
+    margin: 0 0 10px; font-size: 15px; display: flex; align-items: center; gap: 10px;
+  }
+  section.group > h3 .n { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .field {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 13px 15px; transition: border-color .15s, box-shadow .15s;
+  }
+  .field + .field { margin-top: 10px; }
+  .field:hover { box-shadow: 0 2px 8px rgba(16,24,40,.05); }
+  .field.missing { border-color: #fcd34d; background: #fffdf6; }
+  .field.low { border-color: #fcd34d; }
+  .field.conflict, .field.invalid { border-color: #fca5a5; background: #fffbfb; }
+  .field.accepted, .field.done-mark { border-color: #a7f3d0; }
+
+  .field-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .field-head .label { font-weight: 600; font-size: 13.5px; }
+  .field-head .tpl { font-size: 11px; color: var(--muted); background: #f3f4f6; padding: 1px 7px; border-radius: 5px; }
+  .field-head .spacer { flex: 1; }
+  .tag {
+    font-size: 11.5px; padding: 2px 9px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .tag.ok { color: var(--green); background: var(--green-soft); border-color: #a7f3d0; }
+  .tag.low { color: var(--amber); background: var(--amber-soft); border-color: #fde68a; }
+  .tag.missing { color: var(--amber); background: var(--amber-soft); border-color: #fde68a; }
+  .tag.conflict, .tag.invalid { color: var(--red); background: var(--red-soft); border-color: #fecaca; }
+  .tag.work { color: var(--accent); background: var(--accent-soft); border-color: #bfdbfe; }
+
+  .field input[type=text], .field textarea {
+    width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px;
+    font: inherit; font-size: 13.5px; color: var(--text); background: #fff; resize: vertical;
+    transition: border-color .15s;
+  }
+  .field input[type=text]:focus, .field textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+  .field textarea { min-height: 74px; }
+  .field .empty-hint { color: var(--amber); font-size: 12px; margin-top: 4px; }
+
+  .evidence { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+  .evidence summary { cursor: pointer; color: #4b5563; user-select: none; }
+  .evidence summary:hover { color: var(--accent); }
+  .evidence blockquote {
+    margin: 6px 0 0; padding: 8px 11px; background: #f9fafb; border-left: 3px solid #d1d5db;
+    border-radius: 0 7px 7px 0; color: #4b5563; white-space: pre-wrap; word-break: break-word;
+  }
+  .evidence .sect { font-size: 11.5px; color: #9ca3af; margin-top: 4px; }
+
+  .field-actions { display: flex; align-items: center; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
+  .field-actions .state { font-size: 11.5px; color: var(--muted); margin-left: auto; }
+  .field-actions .state.changed { color: var(--accent); font-weight: 600; }
+
+  /* 提示条 */
+  .notice {
+    background: var(--accent-soft); border: 1px solid #bfdbfe; color: #1e40af;
+    border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px;
+  }
+  .notice.warn { background: var(--amber-soft); border-color: #fde68a; color: #92400e; }
+  .notice.error { background: var(--red-soft); border-color: #fecaca; color: #991b1b; }
+  .hidden { display: none !important; }
+
+  /* 生成完成浮层 */
+  .toast {
+    position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%);
+    background: #111827; color: #fff; padding: 11px 18px; border-radius: 10px;
+    font-size: 13px; z-index: 99; box-shadow: 0 8px 24px rgba(0,0,0,.22);
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-inner">
+    <div class="brand">
+      <h1>招标文件填写工作台</h1>
+      <p id="fileInfo">正在加载任务…</p>
+    </div>
+    <div class="progress">
+      <div class="bar"><i id="barFill"></i></div>
+      <div class="txt" id="progressText">已就绪 0 / 0</div>
+    </div>
+    <button class="btn ghost" id="btnAcceptAll">全部采纳 AI 值</button>
+    <button class="btn primary" id="btnGenerate">生成招标文件</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="notice" class="notice hidden"></div>
+
+  <div id="loading" class="notice">正在加载抽取结果…</div>
+
+  <div id="app" class="app hidden">
+    <aside class="nav" id="nav"></aside>
+    <main>
+      <div class="toolbar">
+        <div class="seg" id="filterSeg">
+          <button data-f="all" class="on">全部</button>
+          <button data-f="todo">待处理</button>
+          <button data-f="low">低置信</button>
+          <button data-f="missing">缺失</button>
+        </div>
+        <div class="spacer"></div>
+        <label style="font-size:12.5px;color:#4b5563;display:inline-flex;align-items:center;gap:6px">
+          缺失字段
+          <select id="missingMode">
+            <option value="mark">标记「待补充」</option>
+            <option value="empty">留空</option>
+          </select>
+        </label>
+      </div>
+      <div id="groups"></div>
+    </main>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var jobId = new URLSearchParams(location.search).get("job") || "";
+  var jobInfo = null;
+  var groupsData = [];
+  var state = {};          // key -> { mode: 'ai' | 'accepted' | 'edited' | 'cleared', value }
+  var filter = "all";
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function esc(text) {
+    return String(text == null ? "" : text)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function notice(msg, kind) {
+    var el = $("notice");
+    if (!msg) { el.className = "notice hidden"; return; }
+    el.className = "notice" + (kind ? " " + kind : "");
+    el.textContent = msg;
+  }
+
+  function toast(msg) {
+    var el = document.createElement("div");
+    el.className = "toast";
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(function () { el.remove(); }, 3200);
+  }
+
+  function isLongText(value) {
+    return value != null && String(value).length > 44;
+  }
+
+  function statusOf(item) {
+    var ai = item.value != null && String(item.value).trim() !== "";
+    if (!ai) return "missing";
+    if (item.status === "conflict") return "conflict";
+    if (item.status === "invalid") return "invalid";
+    if (item.status === "low_confidence" || item.status === "inferred") return "low";
+    return "ok";
+  }
+
+  function statusTag(item) {
+    var s = statusOf(item);
+    if (s === "missing") return '<span class="tag missing">AI 未抽取 · 请手动填写</span>';
+    if (s === "conflict") return '<span class="tag conflict">存在冲突 · 请核对</span>';
+    if (s === "invalid") return '<span class="tag invalid">校验未通过</span>';
+    var pct = Math.round((item.confidence || 0) * 100);
+    if (s === "low") return '<span class="tag low">低置信 ' + pct + '%</span>';
+    return '<span class="tag ok">已抽取 ' + pct + '%</span>';
+  }
+
+  function confirmState(key) {
+    var st = state[key];
+    if (!st) return "";
+    if (st.mode === "edited") return "已修改";
+    if (st.mode === "accepted") return "已采纳";
+    if (st.mode === "cleared") return "已清空";
+    return "";
+  }
+
+  function countReady() {
+    var total = 0, ready = 0;
+    groupsData.forEach(function (g) {
+      g.items.forEach(function (item) {
+        if (!item.template) return;
+        total += 1;
+        var st = state[item.key];
+        var val = st ? (st.value || "") : (item.value == null ? "" : String(item.value));
+        if (String(val).trim() !== "") ready += 1;
+      });
+    });
+    return { total: total, ready: ready };
+  }
+
+  function updateProgress() {
+    var c = countReady();
+    var pct = c.total ? Math.round(c.ready / c.total * 100) : 0;
+    $("barFill").style.width = pct + "%";
+    $("progressText").textContent = "已就绪 " + c.ready + " / " + c.total + "（" + pct + "%）";
+  }
+
+  function renderNav() {
+    var html = '<h2>字段分组</h2>';
+    groupsData.forEach(function (g) {
+      var total = 0, missing = 0;
+      g.items.forEach(function (item) {
+        if (!item.template) return;
+        total += 1;
+        var st = state[item.key];
+        var val = st ? (st.value || "") : (item.value == null ? "" : String(item.value));
+        if (String(val).trim() === "") missing += 1;
+      });
+      html += '<a href="#g-' + esc(g.key) + '" data-g="' + esc(g.key) + '">' +
+        '<span>' + esc(g.label) + '</span>' +
+        '<span class="count">' + (missing ? missing + " 缺" : "完成") + '</span></a>';
+    });
+    $("nav").innerHTML = html;
+    $("nav").querySelectorAll("a").forEach(function (a) {
+      a.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        var target = document.getElementById("g-" + a.dataset.g);
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+  }
+
+  function fieldVisible(item) {
+    if (filter === "all") return true;
+    var s = statusOf(item);
+    var st = state[item.key];
+    var val = st ? (st.value || "") : (item.value == null ? "" : String(item.value));
+    if (filter === "missing") return s === "missing";
+    if (filter === "low") return s === "low" || s === "conflict" || s === "invalid";
+    if (filter === "todo") return s !== "ok" || !st || st.mode === "ai";
+    return true;
+  }
+
+  function renderGroups() {
+    var html = "";
+    groupsData.forEach(function (g) {
+      var visible = g.items.filter(function (i) { return i.template && fieldVisible(i); });
+      if (!visible.length) return;
+      html += '<section class="group" id="g-' + esc(g.key) + '">' +
+        '<h3>' + esc(g.label) + ' <span class="n">' + visible.length + ' 个字段</span></h3>';
+      visible.forEach(function (item) { html += fieldHtml(item); });
+      html += "</section>";
+    });
+    if (!html) html = '<div class="notice">当前筛选条件下没有字段。</div>';
+    $("groups").innerHTML = html;
+    bindFieldEvents();
+    updateProgress();
+  }
+
+  function fieldHtml(item) {
+    var s = statusOf(item);
+    var st = state[item.key];
+    var value = st ? (st.value || "") : (item.value == null ? "" : String(item.value));
+    var cls = "field";
+    if (s === "missing") cls += " missing";
+    else if (s === "low") cls += " low";
+    else if (s === "conflict" || s === "invalid") cls += " conflict";
+    if (st && st.mode === "accepted") cls += " accepted";
+
+    var input = isLongText(value)
+      ? '<textarea data-input rows="3">' + esc(value) + "</textarea>"
+      : '<input type="text" data-input value="' + esc(value) + '">';
+
+    var evidence = "";
+    if (item.evidence && item.evidence.length) {
+      var quotes = item.evidence.slice(0, 2).map(function (ev) {
+        var quote = String(ev.quote || "").slice(0, 240);
+        var sect = ev.section ? '<div class="sect">来自：' + esc(ev.section) + "</div>" : "";
+        return "<blockquote>" + esc(quote) + "</blockquote>" + sect;
+      }).join("");
+      evidence = '<details class="evidence"><summary>查看原文证据（' + item.evidence.length + " 条）</summary>" + quotes + "</details>";
+    }
+
+    var warn = "";
+    if (item.errors && item.errors.length) warn = '<div class="empty-hint">' + esc(item.errors.join("；")) + "</div>";
+    else if (item.warnings && item.warnings.length) warn = '<div class="empty-hint">' + esc(item.warnings.join("；")) + "</div>";
+    else if (s === "missing") warn = '<div class="empty-hint">AI 没有从需求报告里找到这项，请手动填写或留空。</div>';
+
+    var tplBadge = item.template ? '<span class="tpl">' + esc(item.template) + "</span>" : '<span class="tpl">不写入模板</span>';
+    var aiValue = item.value == null ? "" : String(item.value);
+    var cur = confirmState(item.key);
+
+    return '<div class="' + cls + '" data-key="' + esc(item.key) + '" data-template="' + esc(item.template || "") + '">' +
+      '<div class="field-head">' +
+        '<span class="label">' + esc(item.label) + "</span>" + tplBadge +
+        '<span class="spacer"></span>' + statusTag(item) +
+      "</div>" +
+      input + warn + evidence +
+      '<div class="field-actions">' +
+        '<button class="btn small" data-act="accept"' + (aiValue ? "" : " disabled") + ">采纳 AI 值</button>" +
+        '<button class="btn small ghost" data-act="clear">清空</button>' +
+        '<span class="state' + (cur ? " changed" : "") + '" data-state>' + esc(cur) + "</span>" +
+      "</div></div>";
+  }
+
+  function fieldEl(node) { return node.closest(".field"); }
+
+  function syncStateLabel(el, text) {
+    var label = el.querySelector("[data-state]");
+    label.textContent = text || "";
+    label.className = "state" + (text ? " changed" : "");
+  }
+
+  function bindFieldEvents() {
+    $("groups").querySelectorAll(".field").forEach(function (el) {
+      var key = el.dataset.key;
+      var input = el.querySelector("[data-input]");
+
+      input.addEventListener("input", function () {
+        state[key] = state[key] || {};
+        state[key].value = input.value;
+        state[key].mode = "edited";
+        syncStateLabel(el, "已修改");
+        if (statusOf({ value: input.value, status: "ok" }) === "missing") {
+          el.classList.add("missing");
+        } else {
+          el.classList.remove("missing");
+        }
+        updateProgress();
+      });
+
+      el.querySelector('[data-act="accept"]').addEventListener("click", function () {
+        var orig = findItem(key);
+        if (!orig) return;
+        var aiValue = orig.value == null ? "" : String(orig.value);
+        input.value = aiValue;
+        state[key] = { value: aiValue, mode: "accepted" };
+        el.classList.remove("missing");
+        el.classList.add("accepted");
+        syncStateLabel(el, "已采纳");
+        updateProgress();
+      });
+
+      el.querySelector('[data-act="clear"]').addEventListener("click", function () {
+        input.value = "";
+        state[key] = { value: "", mode: "cleared" };
+        el.classList.add("missing");
+        el.classList.remove("accepted");
+        syncStateLabel(el, "已清空");
+        updateProgress();
+      });
+    });
+  }
+
+  function findItem(key) {
+    for (var i = 0; i < groupsData.length; i += 1) {
+      var items = groupsData[i].items;
+      for (var j = 0; j < items.length; j += 1) {
+        if (items[j].key === key) return items[j];
+      }
+    }
+    return null;
+  }
+
+  function collectValues() {
+    var values = {};
+    document.querySelectorAll(".field").forEach(function (el) {
+      var tpl = el.dataset.template;
+      if (!tpl) return;
+      var input = el.querySelector("[data-input]");
+      values[tpl] = input ? input.value.trim() : "";
+    });
+    return values;
+  }
+
+  async function generate() {
+    var btn = $("btnGenerate");
+    var values = collectValues();
+    var count = Object.keys(values).length;
+    if (!count) { notice("没有可写入模板的字段。", "warn"); return; }
+    btn.disabled = true;
+    btn.textContent = "生成中…";
+    notice("正在渲染招标文件，请稍候…");
+    try {
+      var res = await fetch("/api/jobs/" + jobId + "/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          values: values,
+          missing_mode: $("missingMode").value
+        })
+      });
+      if (!res.ok) {
+        var err = await res.json().catch(function () { return {}; });
+        throw new Error(err.error || ("HTTP " + res.status));
+      }
+      var blob = await res.blob();
+      var name = (jobInfo && jobInfo.filename ? jobInfo.filename : "招标文件")
+        .replace(/\.(docx?|pdf|txt)$/i, "");
+      var link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = name + "-招标文件.docx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(function () { URL.revokeObjectURL(link.href); }, 4000);
+      notice("");
+      toast("已生成并开始下载：" + link.download);
+    } catch (err) {
+      notice("生成失败：" + err.message, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "生成招标文件";
+    }
+  }
+
+  async function load() {
+    if (!jobId) {
+      notice("缺少任务参数。请从解析结果页点击「去填写招标文件」进入。", "error");
+      $("loading").classList.add("hidden");
+      return;
+    }
+    try {
+      var jobRes = await fetch("/api/jobs/" + jobId);
+      if (!jobRes.ok) throw new Error("任务不存在或已过期");
+      jobInfo = await jobRes.json();
+      $("fileInfo").textContent = jobInfo.filename + " · 状态：" + (jobInfo.stage || jobInfo.status);
+      if (jobInfo.status !== "done") {
+        $("loading").textContent = "该任务尚未完成（当前：" + (jobInfo.stage || jobInfo.status) + "），请稍后刷新。";
+        notice("任务尚未完成，无法进入填写。", "warn");
+        return;
+      }
+
+      var res = await fetch("/api/jobs/" + jobId + "/fields");
+      if (!res.ok) throw new Error("读取字段失败");
+      var data = await res.json();
+      groupsData = data.groups || [];
+
+      $("loading").classList.add("hidden");
+      $("app").classList.remove("hidden");
+      renderNav();
+      renderGroups();
+
+      if (data.missing) {
+        notice("AI 从需求报告中抽取了 " + (data.total - data.missing) + " / " + data.total +
+          " 个字段。缺失的 " + data.missing + " 项请手动补充，确认无误后点击右上角「生成招标文件」。");
+      } else {
+        notice("全部 " + data.total + " 个字段已抽取完成，请逐项核对后生成招标文件。");
+      }
+    } catch (err) {
+      $("loading").classList.add("hidden");
+      notice("加载失败：" + err.message, "error");
+    }
+  }
+
+  // 事件绑定
+  $("filterSeg").addEventListener("click", function (ev) {
+    var btn = ev.target.closest("button[data-f]");
+    if (!btn) return;
+    filter = btn.dataset.f;
+    this.querySelectorAll("button").forEach(function (b) { b.classList.toggle("on", b === btn); });
+    renderGroups();
+  });
+
+  $("btnAcceptAll").addEventListener("click", function () {
+    groupsData.forEach(function (g) {
+      g.items.forEach(function (item) {
+        if (item.value == null || String(item.value).trim() === "") return;
+        state[item.key] = { value: String(item.value), mode: "accepted" };
+      });
+    });
+    renderNav();
+    renderGroups();
+    toast("已采纳全部 AI 抽取值");
+  });
+
+  $("btnGenerate").addEventListener("click", generate);
+
+  load();
+})();
+</script>
+</body>
+</html>

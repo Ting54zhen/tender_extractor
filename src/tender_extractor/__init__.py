@@ -30,6 +30,7 @@ from .compliance_matcher import (
     match_qualifications,
     render_compliance_report,
 )
+from .doc_generator import GenerationResult, generate_tender_document
 from .graph_builder import GraphData, build_graph_from_result, to_turtle
 from .graph_queries import (
     analyze_graph,
@@ -56,6 +57,7 @@ __all__ = [
     "ComplianceResult",
     "Extractor",
     "ExtractionResult",
+    "GenerationResult",
     "GraphData",
     "PlatformRecognitionError",
     "RelationItem",
@@ -69,6 +71,7 @@ __all__ = [
     "extract_document",
     "extract_relations",
     "generate_bid_document",
+    "generate_tender_document",
     "map_requirement_evidence",
     "match_qualifications",
     "recognize_to_draft",
