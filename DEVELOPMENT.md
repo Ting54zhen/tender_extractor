@@ -331,77 +331,21 @@ main   ← 随时可运行、可打包；不直接 push，只接受 PR
 
 ### 8.2.1 日常流程：提交到哪、从哪拉
 
-**只有一套远端：** `origin` = `git@github.com:Ting54zhen/tender_extractor.git`。不 fork、不加第二个 remote；长期分支只有 `main`，所有改动都从 `main` 拉、往 `main` 合。
+先说要去的方向：代码只有一个落脚点，就是 `origin`（`git@github.com:Ting54zhen/tender_extractor.git`）。拉代码从这里拉，推分支也往这里推，不分叉、不加第二个远程仓库。长期存在的分支只有 `main` 一条，所有工作都从 `main` 出发，最后合回 `main`。
 
-| 动作 | 命令 | 落在哪个分支 |
-|---|---|---|
-| 拉最新 | `git switch main && git pull --ff-only` | 本地 `main` ← 远端 `main` |
-| 提交 | 在 `feature/*` 上 `git add <具体文件>` + `git commit` | 本地临时分支 |
-| 推送 | `git push -u origin feature/xxx` | 远端**同名**分支，不是 main |
+每次开工，先切回 `main`，用 `git pull --ff-only` 把远端最新取下来。这里只允许快进，一旦出现分叉，说明有人绕过 PR 直接往 `main` 推过，先查清原因再继续。拿到最新代码后，从 `main` 开一条临时分支，例如 `git switch -c feature/compliance-check`，命名沿用 8.2 的前缀。之后的改动全部落在这条分支上，`main` 上不写代码。
 
-**标准六步（每次开发照着走）：**
+开发过程中按 8.6 的清单自测，测试全绿再提交。提交时只添加自己确实改过的文件，不要用 `git add -A` 图省事；提交信息按 8.3 的格式写。提交完成后，把这条分支推到远端的同名分支，即 `git push -u origin feature/compliance-check`。`-u` 只有第一次需要，之后直接 `git push` 就行。注意推的是自己的临时分支，不是 `main`。
 
-```bash
-# 1. 回到 main 取最新（只允许快进；出现分叉说明有人直推过 main，先查清）
-git switch main
-git pull --ff-only
+推送完成后到 GitHub 开 PR，方向是 `main` 接收、`feature/compliance-check` 提供改动，仓库页面的 compare 链接会自动带上这个方向。review 通过后用 Squash merge 合并，并顺手删掉远端的临时分支。
 
-# 2. 从 main 开分支，命名按 8.2 前缀
-git switch -c feature/compliance-check
+合并之后回到本地收尾：切回 `main`，再 `git pull --ff-only` 拿到刚合入的提交，用 `git branch -d` 删掉本地临时分支，最后 `git remote prune origin` 清掉远端已删除分支留下的引用。
 
-# 3. 开发 + 自测（按 8.6 清单）
-.venv/Scripts/python.exe -m pytest tests -q
+如果分支还没合并、`main` 却已经前进了，不要用 merge 把历史搅成网状，先 `git fetch origin`，再 `git rebase origin/main`。冲突逐块解决，改完 `git add`，然后 `git rebase --continue` 继续；全部完成后用 `git push --force-with-lease` 更新自己的临时分支。这条命令只对自己的分支用，永远不要对 `main` 用。
 
-# 4. 提交：只 add 明确文件，不用 git add -A
-git status --short
-git add src/tender_extractor/compliance.py tests/test_compliance.py
-git commit -m "feat(rules): 新增排他性条款识别" -m "命中后标 conflict，交人工复核"
+还有几条边界要守住：永远从 `main` 开分支，不要从别人的 `feature/*` 拉；需要别人尚未合并的代码时，等它合进 `main`，或者事先约定好先后顺序；本地 `main` 只做两件事——拉取最新、当分支基线。明确禁止直接 `git push origin main`（首次建基线除外）、`git push --force`、以及在 `main` 上直接提交。
 
-# 5. 推到远端同名分支
-git push -u origin feature/compliance-check
-
-# 6. 开 PR：base=main ← compare=feature/compliance-check
-#    https://github.com/Ting54zhen/tender_extractor/compare/main...feature/compliance-check?expand=1
-#    Squash and merge → 删除远端分支
-```
-
-**合并之后的本地收尾：**
-
-```bash
-git switch main
-git pull --ff-only
-git branch -d feature/compliance-check
-git remote prune origin
-```
-
-**分支还没合、`main` 已经前进：**
-
-```bash
-git fetch origin
-git rebase origin/main      # 冲突逐块解决，不要整文件覆盖
-git add <解决后的文件>
-git rebase --continue
-git push --force-with-lease # 只推自己的临时分支，禁止推 main
-```
-
-**分清「拉到哪个分支」：**
-
-- 永远从 `main` 开分支，**不要**从别人的 `feature/*` 拉，也不要直接往 `main` 提交；
-- 需要别人未合并的代码时，等对方合并进 `main`，或事先约定由谁合并后再拉；
-- 本地 `main` 只做两件事：`pull` 和当分支基线，不写代码。
-
-**禁止：**
-
-- `git push origin main`（首次建基线除外，见下方当前状态）；
-- `git push --force`；只允许 `--force-with-lease` 推自己的临时分支；
-- 在 `main` 上直接 `commit`。
-
-**当前状态（2026-11-04 核对）：**
-
-- `main` 已推至 `bfa5af4`；远端分支：`main` + 个人分支 `yc`、`hmy`；
-- `yc`、`hmy` 只在本人分支开发，合并回 `main` 仍走 PR；
-- `git config user.name` 当前是 `Tender Platform Team`（占位），提交不会关联到你的 GitHub 账号，建议改成自己的名字与邮箱；
-- 到 GitHub 给 `main` 开保护（Settings → Rules / Branches → Require a pull request before merging），否则「只接受 PR」只能靠自觉。
+当前状态（2026-11-04）：`main` 已推送，远端分支为 `main` 和两条个人分支 `yc`、`hmy`；这两条个人分支只在本人开发时使用，合并回 `main` 仍然走 PR。`git config user.name` 目前是占位的 `Tender Platform Team`，提交不会关联到你的 GitHub 账号，建议改成自己的名字和邮箱。仓库保持 Private，未启用 GitHub 分支保护（Private + Free 计划不支持），「只接受 PR」目前靠约定执行。
 
 ### 8.3 提交信息规范
 
