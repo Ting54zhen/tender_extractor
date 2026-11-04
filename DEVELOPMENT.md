@@ -398,9 +398,8 @@ git push --force-with-lease # 只推自己的临时分支，禁止推 main
 
 **当前状态（2026-11-04 核对）：**
 
-- 远端只有 `main` 一个分支，没有他人分支；
-- 本地 `main` 领先远端 2 个提交（`65f3f73`、`fe40130`），尚未推送；
-- 建议先把这 2 条推上去当基线：`git push origin main`；此后的改动一律走分支；
+- `main` 已推至 `bfa5af4`；远端分支：`main` + 个人分支 `yc`、`hmy`；
+- `yc`、`hmy` 只在本人分支开发，合并回 `main` 仍走 PR；
 - `git config user.name` 当前是 `Tender Platform Team`（占位），提交不会关联到你的 GitHub 账号，建议改成自己的名字与邮箱；
 - 到 GitHub 给 `main` 开保护（Settings → Rules / Branches → Require a pull request before merging），否则「只接受 PR」只能靠自觉。
 
