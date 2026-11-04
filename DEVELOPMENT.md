@@ -265,12 +265,7 @@ python -m pytest tests -q
 | 参赛材料不进仓库 | `参赛材料/` 含个人信息，已忽略 |
 | 模型输出不作最终事实 | 所有结果均需人工复核，产品层面已内置复核清单 |
 
-**提交前自检：**
-
-```bash
-git status --short          # 不应出现 data/、参赛材料/ 下任何文件
-git diff --cached --stat    # 确认变更范围符合预期
-```
+**提交前自检：**按 8.6 清单执行；其中 `git status --short` 不应出现 `data/`、`参赛材料/` 下任何文件。
 
 ---
 
@@ -304,7 +299,7 @@ main   ← 随时可运行、可打包；不直接 push，只接受 PR
 | `docs/<简述>` | 文档 | `docs/deploy-macos` |
 | `chore/<简述>` | 依赖、脚本、打包 | `chore/build-exe-pathsep` |
 
-`<scope>` 取模块名：`frontend`、`pipeline`、`web`、`rules`、`templates`、`graph`。
+`<scope>` 取 8.3 表格里的模块名（`frontend`、`web`、`rules`、`generator` …）。
 
 **生命周期**：从最新 `main` 拉出 → 开发 + 自测 → 提交 PR → 1 人 review → Squash merge → 删分支。
 分支存活不超过 2 周，超过说明任务该拆。
@@ -334,20 +329,184 @@ main   ← 随时可运行、可打包；不直接 push，只接受 PR
 
 **PR 要求**：改 `src/` 必须带测试且 `pytest` 全绿；改 `frontend/` 附一张改动后的截图；改 API 契约按 8.4 同步 `frontend/README.md`。
 
+### 8.2.1 日常流程：提交到哪、从哪拉
+
+**只有一套远端：** `origin` = `git@github.com:Ting54zhen/tender_extractor.git`。不 fork、不加第二个 remote；长期分支只有 `main`，所有改动都从 `main` 拉、往 `main` 合。
+
+| 动作 | 命令 | 落在哪个分支 |
+|---|---|---|
+| 拉最新 | `git switch main && git pull --ff-only` | 本地 `main` ← 远端 `main` |
+| 提交 | 在 `feature/*` 上 `git add <具体文件>` + `git commit` | 本地临时分支 |
+| 推送 | `git push -u origin feature/xxx` | 远端**同名**分支，不是 main |
+
+**标准六步（每次开发照着走）：**
+
+```bash
+# 1. 回到 main 取最新（只允许快进；出现分叉说明有人直推过 main，先查清）
+git switch main
+git pull --ff-only
+
+# 2. 从 main 开分支，命名按 8.2 前缀
+git switch -c feature/compliance-check
+
+# 3. 开发 + 自测（按 8.6 清单）
+.venv/Scripts/python.exe -m pytest tests -q
+
+# 4. 提交：只 add 明确文件，不用 git add -A
+git status --short
+git add src/tender_extractor/compliance.py tests/test_compliance.py
+git commit -m "feat(rules): 新增排他性条款识别" -m "命中后标 conflict，交人工复核"
+
+# 5. 推到远端同名分支
+git push -u origin feature/compliance-check
+
+# 6. 开 PR：base=main ← compare=feature/compliance-check
+#    https://github.com/Ting54zhen/tender_extractor/compare/main...feature/compliance-check?expand=1
+#    Squash and merge → 删除远端分支
+```
+
+**合并之后的本地收尾：**
+
+```bash
+git switch main
+git pull --ff-only
+git branch -d feature/compliance-check
+git remote prune origin
+```
+
+**分支还没合、`main` 已经前进：**
+
+```bash
+git fetch origin
+git rebase origin/main      # 冲突逐块解决，不要整文件覆盖
+git add <解决后的文件>
+git rebase --continue
+git push --force-with-lease # 只推自己的临时分支，禁止推 main
+```
+
+**分清「拉到哪个分支」：**
+
+- 永远从 `main` 开分支，**不要**从别人的 `feature/*` 拉，也不要直接往 `main` 提交；
+- 需要别人未合并的代码时，等对方合并进 `main`，或事先约定由谁合并后再拉；
+- 本地 `main` 只做两件事：`pull` 和当分支基线，不写代码。
+
+**禁止：**
+
+- `git push origin main`（首次建基线除外，见下方当前状态）；
+- `git push --force`；只允许 `--force-with-lease` 推自己的临时分支；
+- 在 `main` 上直接 `commit`。
+
+**当前状态（2026-11-04 核对）：**
+
+- 远端只有 `main` 一个分支，没有他人分支；
+- 本地 `main` 领先远端 2 个提交（`65f3f73`、`fe40130`），尚未推送；
+- 建议先把这 2 条推上去当基线：`git push origin main`；此后的改动一律走分支；
+- `git config user.name` 当前是 `Tender Platform Team`（占位），提交不会关联到你的 GitHub 账号，建议改成自己的名字与邮箱；
+- 到 GitHub 给 `main` 开保护（Settings → Rules / Branches → Require a pull request before merging），否则「只接受 PR」只能靠自觉。
+
 ### 8.3 提交信息规范
 
-```
-<type>(<scope>): <中文简述>
+**格式**
 
-type:  feat | fix | refactor | docs | test | chore
-scope: 模块名，如 frontend、pipeline、cli、graph
+```
+<type>(<scope>): <简述>
+
+<正文：为什么改、影响什么>
+
+<footer：BREAKING CHANGE / Refs>
 ```
 
-示例：`feat(frontend): 上传区支持拖拽与进度条`
+**type 七选一：**
+
+| type | 用途 | 进 Release Notes |
+|---|---|---|
+| `feat` | 新增能力、页面、字段、接口 | 是 |
+| `fix` | 修缺陷（规则误判、渲染错位、崩溃） | 是 |
+| `refactor` | 不改外部行为的重构 | 是 |
+| `perf` | 性能优化（大文档解析、批量抽取） | 是 |
+| `test` | 只增改测试 | 否 |
+| `docs` | 只改文档 | 否 |
+| `chore` | 依赖、脚本、打包、目录清理 | 否 |
+
+**scope 用仓库现有模块名，不自造：**
+
+| scope | 对应代码 |
+|---|---|
+| `pipeline` | `pipeline.py` 编排、`models.py` 数据结构 |
+| `rules` | `rules.py`、`cleaning.py`、`validation.py`、`reviewer.py` |
+| `generator` | `doc_generator.py`、`templates/`、`scripts/prepare_template.py` |
+| `web` | `web.py` 路由、任务调度、静态托管 |
+| `storage` | `storage.py`、`paths.py`、SQLite 表结构 |
+| `graph` | `graph_builder.py`、`graph_queries.py` |
+| `frontend` | `frontend/` 全部文件 |
+| `cli` | `cli.py`、`__main__.py` |
+| `scripts` | `scripts/` 下的工具脚本 |
+| `build` | `build_exe.py`、`check_exe.py`、`pyproject.toml`、`start.bat` |
+| `docs` | `README.md`、`DEVELOPMENT.md`、`DEPLOYMENT.md`、`docs/` |
+| `structure` | 目录搬迁、模块拆分 |
+
+跨多个 scope 且没有主次时省略 scope：`chore: 清理打包中间产物`。
+
+**简述：**中文、动词开头，写「改完是什么样」，不写「修改 / 更新 / 优化」这类空词，句末不加句号。
+
+| 写法 | 评价 |
+|---|---|
+| `fix(rules): 修正项目联系方式误匹配与多号码电话校验` | ✅ 看得出改了什么 |
+| `feat(generator): 招标文件结构化表格回填与编制规范默认值` | ✅ |
+| `fix: bug`、`update code` | ❌ 无信息 |
+| `feat: 各种改动` | ❌ 应拆分 |
+
+**正文必须写的情况：**改了行为或契约；别人需要跟着做（重装依赖、重跑 `prepare_template.py`、迁移 DB）；有取舍或被否掉的方案。正文讲「为什么」，不复述 diff。
+
+**footer：**
+
+- `BREAKING CHANGE: <不兼容点>` —— 改 `/api/*` 字段、改模板占位符、改输出 JSON 结构时必须写；
+- `Refs: #12` / `Closes: #12` 关联 issue；
+- 禁止写真实项目名、单位名、金额、人名（`data/` 里的内容不进提交信息）。
+
+**粒度：**
+
+- 一次提交只做一件事，功能改动不夹带格式化或无关重命名；
+- 单个 PR 建议 ≤ 400 行 diff，超过先拆任务；
+- 分支上允许 `wip` 提交，PR 合并前 squash 成一条符合本规范的记录。
 
 ### 8.4 接口变更流程
 
 改 API 路径/字段结构时：**后端先改 `web.py` → 同步更新 `frontend/README.md` 契约表 → 通知前端 → 前端适配 → 同一次 PR 或紧邻 PR 合并**。禁止单方面改契约。
+
+### 8.5 共同开发注意点
+
+| # | 注意点 | 具体做法 |
+|---|---|---|
+| 1 | 只用项目虚拟环境跑测试 | `.venv/Scripts/python.exe -m pytest tests -q`；系统 Python 缺 `docxtpl`，直接跑会出现 12 个收集错误 |
+| 2 | 编码统一 UTF-8 | Windows 终端默认 GBK：跑脚本前设 `$env:PYTHONUTF8='1'`（`start.bat` 已设）；不要用 `>` 重定向生成含中文的源文件 |
+| 3 | `data/` 各人本地 | 代码和测试里不出现 `data/` 下的具体路径，测试统一用 `tmp_path` |
+| 4 | 不手改 `templates/compiled/` | 改源模板后重跑 `prepare_template.py`，compiled 是产物 |
+| 5 | 契约同步 | 改 `web.py` 路由/字段 → 同 PR 更新 `frontend/README.md`；前端改完先对表 |
+| 6 | 高冲突文件先打招呼 | `web.py`、`cli.py`、`config/fields.json` 多人易撞；按函数/字段块改，禁止整文件格式化 |
+| 7 | 模型链路必须可离线测 | 测试不连网、不依赖 Ollama，一律 mock；手工验证再用 `start.bat health` |
+| 8 | 金额只用 `Decimal` | 走 `cleaning.parse_money`，禁止 float 参与金额运算 |
+| 9 | 证据不可放宽 | 新字段必须带 `block_id` + `quote`，且值真的出现在引文里；不为填充率好看放宽校验 |
+| 10 | 不加运行时依赖 | 当前仅 `python-docx`、`docxtpl`（可选 `pdfplumber`）；要加先在 PR 里说明 stdlib 为何做不到 |
+| 11 | 冲突不要整文件覆盖 | `git fetch` 后 rebase `main`，逐块合并；禁止 `--ours` / `--theirs` 一把梭 |
+| 12 | 提交前先看 `git status` | `git add -A` 之前确认没有 `data/`、`dist/`、`build/`、`*.spec`、`参赛材料/` 混入 |
+
+### 8.6 提交前自检清单
+
+```bash
+.venv/Scripts/python.exe -m pytest tests -q   # 必须 exit 0
+git diff --check                              # 无行尾空白、无冲突标记
+git status --short                            # 只含预期文件，无 data/、dist/、build/
+git diff --stat                               # 变更范围与提交信息对得上
+```
+
+- [ ] 改了 `src/` → 有对应测试，没有删断言迁就代码
+- [ ] 改了 `frontend/` → 浏览器实际点过一遍，PR 附截图
+- [ ] 改了 API → `frontend/README.md` 契约表同步
+- [ ] 改了模板 → 重跑 `prepare_template.py` 与 `verify_generated.py`
+- [ ] 提交信息能覆盖 diff 里的全部改动，没有夹带
+
+**PR 描述四行**：改了什么 / 为什么 / 怎么验证（命令与结果）/ 影响面（是否动契约、模板、DB）。
 
 ---
 
