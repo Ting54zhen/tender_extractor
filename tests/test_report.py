@@ -52,6 +52,35 @@ def test_report_renders_rejected_repair_round_with_reason():
     assert "采购人（采购人疑似地址而非单位名称，请复核）" in text
 
 
+def test_report_renders_compliance_section():
+    result = _result()
+    result.compliance = {
+        "ok": False,
+        "counts": {"high": 1, "medium": 0, "low": 0},
+        "policy": {"version": "v1", "mode": "rule_only"},
+        "findings": [
+            {
+                "rule_id": "brand_restriction",
+                "category": "品牌/供应商限定",
+                "severity": "high",
+                "block_id": "b0",
+                "quote": "投标产品必须为华为品牌。",
+                "matched": "必须为华为品牌",
+                "suggestion": "删除品牌限定，改用技术参数描述",
+                "section": "资格要求",
+                "basis": "《政府采购法实施条例》第二十条",
+            }
+        ],
+    }
+
+    text = render_markdown(result)
+
+    assert "合规审查" in text
+    assert "品牌/供应商限定" in text
+    assert "投标产品必须为华为品牌。" in text
+    assert "删除品牌限定，改用技术参数描述" in text
+
+
 def test_cell_escapes_pipe_but_quote_does_not():
     """表格单元格必须转义竖线，引用正文不转义——这是 _cell/_quote 唯一的行为差异。"""
     assert _cell("甲|乙") == "甲\\|乙"

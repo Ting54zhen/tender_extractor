@@ -815,8 +815,37 @@ def render_markdown(result: ExtractionResult) -> str:
     lines.append(f"- 原文哈希：`{_plain(data['source'].get('sha256'))}`")
     lines.append("")
 
+    # ------------------------------------------------------------ 合规审查
+    compliance = data.get("compliance") or {}
+    findings = compliance.get("findings") or []
+    counts = compliance.get("counts") or {}
+    lines.append(
+        f"## 九、合规审查（规则层命中 {len(findings)} 条；"
+        f"高 {counts.get('high', 0)} / 中 {counts.get('medium', 0)} / 低 {counts.get('low', 0)}）"
+    )
+    lines.append("")
+    if findings:
+        lines.append(
+            "> 只提示不改写：以下表述可能构成排他性/倾向性条件，需人工确认后修改；"
+            "误报可直接忽略，不影响生成。"
+        )
+        lines.append("")
+        rows = [
+            [
+                _priority(item.get("severity")),
+                _cell(item.get("category"), 24),
+                _cell(item.get("quote"), 300),
+                _cell(item.get("suggestion"), 300),
+            ]
+            for item in findings
+        ]
+        lines.extend(_table(["等级", "类别", "原文", "修改建议"], rows))
+    else:
+        lines.append("未发现规则库覆盖的排他性/倾向性表述。")
+    lines.append("")
+
     # ------------------------------------------------------------ 说明
-    lines.append("## 九、审核说明")
+    lines.append("## 十、审核说明")
     lines.append("")
     lines.append("- 本报告只做信息抽取和校验，不直接改写 Word 模板；平台按 `template_values` 绑定。")
     lines.append("- 高优先级项必须人工确认后才能提交；`inferred` 值来自标题、文件名或条款推断，不能直接当事实。")
