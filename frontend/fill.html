@@ -4,203 +4,257 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>招标文件填写工作台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%232563eb'/%3E%3Cpath%20d='M10%207h8l5%205v13a1%201%200%200%201-1%201H10a1%201%200%200%201-1-1V8a1%201%200%200%201%201-1z'%20fill='%23fff'/%3E%3Cpath%20d='M18%207v5h5'%20fill='%23c2d8ff'/%3E%3Cpath%20d='M12.5%2016h7M12.5%2019.5h4.5'%20stroke='%232563eb'%20stroke-width='1.4'%20stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/app.css">
 <style>
-  :root {
-    --bg: #f5f6f8;
-    --card: #ffffff;
-    --line: #e5e7eb;
-    --text: #111827;
-    --muted: #6b7280;
-    --accent: #2563eb;
-    --accent-soft: #eff6ff;
-    --green: #059669;
-    --green-soft: #ecfdf5;
-    --amber: #b45309;
-    --amber-soft: #fffbeb;
-    --red: #dc2626;
-    --red-soft: #fef2f2;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-  }
-  .wrap { max-width: 1320px; margin: 0 auto; padding: 18px 20px 80px; }
+  /* 本页专属：页头进度、左侧分组导航、字段列表工作区 */
 
-  /* 顶部栏 */
-  header.top {
-    position: sticky; top: 0; z-index: 20; background: rgba(245,246,248,.94);
-    backdrop-filter: blur(6px); border-bottom: 1px solid var(--line);
-    padding: 12px 0; margin-bottom: 16px;
+  .fill-head {
+    display: flex; align-items: flex-end; gap: 24px; flex-wrap: wrap;
+    padding: 4px 0 14px;
   }
-  .top-inner { max-width: 1320px; margin: 0 auto; padding: 0 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-  .brand h1 { margin: 0; font-size: 17px; }
-  .brand p { margin: 1px 0 0; color: var(--muted); font-size: 12px; word-break: break-all; }
-  .progress { flex: 1; min-width: 180px; }
-  .progress .bar { height: 7px; background: #e8eaee; border-radius: 99px; overflow: hidden; }
-  .progress .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #2563eb, #059669); transition: width .25s; }
-  .progress .txt { font-size: 12px; color: var(--muted); margin-top: 4px; }
-  .btn {
-    border: 1px solid var(--line); background: #fff; color: var(--text);
-    padding: 8px 14px; border-radius: 9px; cursor: pointer; font-size: 13.5px;
-    transition: .15s; white-space: nowrap;
+  .fill-head-main { flex: 1 1 240px; min-width: 0; }
+  .fill-head h1 {
+    font-family: var(--font-serif); font-size: 30px; font-weight: 400;
+    letter-spacing: -0.02em; line-height: 1.2; margin: 0 0 4px;
   }
-  .btn:hover { border-color: #cbd5e1; }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-  .btn.primary:hover { background: #1d4ed8; }
-  .btn.primary:disabled { background: #93b4f5; border-color: #93b4f5; cursor: not-allowed; }
-  .btn.ghost { background: transparent; }
-  .btn.small { padding: 4px 10px; font-size: 12.5px; border-radius: 7px; }
+  .fill-head p { margin: 0; color: var(--muted); font-size: 12.5px; word-break: break-all; }
+  .fill-head-actions { display: flex; gap: 8px; }
+
+  .progress { margin: 0 0 16px; }
+  .progress .bar {
+    height: 2px; margin: 0; background: var(--line-soft);
+    border-radius: 99px; overflow: hidden;
+  }
+  .progress .bar > i {
+    width: 0;
+    background: var(--ink);
+    animation: none;
+    transition: width .3s ease;
+  }
+  .progress .txt { font-size: 11.5px; color: var(--muted); margin-top: 5px; font-variant-numeric: tabular-nums; }
 
   /* 布局 */
-  .app { display: grid; grid-template-columns: 216px 1fr; gap: 16px; align-items: start; }
-  @media (max-width: 920px) { .app { grid-template-columns: 1fr; } .nav { position: static !important; } }
+  .app { display: grid; grid-template-columns: 196px minmax(0, 1fr); gap: 28px; align-items: start; }
+  @media (max-width: 960px) { .app { grid-template-columns: 1fr; } .nav { position: static !important; } }
 
-  /* 左侧导航 */
-  .nav {
-    position: sticky; top: 96px;
-    background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px;
+  /* 窄屏：分组导航改为一行横向滚动的胶囊，避免占掉半屏 */
+  @media (max-width: 760px) {
+    .nav {
+      display: flex; gap: 4px; overflow-x: auto; padding-bottom: 4px;
+      scrollbar-width: none; margin-bottom: 6px;
+    }
+    .nav::-webkit-scrollbar { display: none; }
+    .nav h2 { display: none; }
+    .nav a { flex: none; border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; }
+    .nav a.active { border-color: var(--ink); background: var(--ink); color: #fff; }
+    .nav a.active .count { color: rgba(255, 255, 255, .7); }
+    .nav a .warn-dot { margin-left: 4px; }
   }
-  .nav h2 { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); font-weight: 600; letter-spacing: .4px; }
+
+  /* 左侧分组导航：无卡片，靠留白与选中底色分组 */
+  .nav {
+    position: sticky; top: 16px;
+    background: transparent; border: none; padding: 0;
+    max-height: calc(100vh - 32px); overflow-y: auto;
+  }
+  .nav h2 {
+    margin: 0 0 6px; padding: 0 9px;
+    font-size: 11px; color: var(--faint);
+    font-weight: 500; letter-spacing: .04em;
+  }
   .nav a {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
-    padding: 8px 10px; border-radius: 8px; color: var(--text); text-decoration: none; font-size: 13px;
+    padding: 7px 9px; border-radius: 8px; color: var(--ink-2);
+    text-decoration: none; font-size: 13px; transition: background-color .14s, color .14s;
   }
-  .nav a:hover { background: #f3f4f6; }
-  .nav a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-  .nav a .count { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
-  .nav a.active .count { color: var(--accent); }
+  .nav a:hover { background: var(--surface); color: var(--ink); }
+  .nav a.active { background: var(--surface); color: var(--ink); font-weight: 600; }
+  .nav a .count { font-size: 11px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .nav a.active .count { color: var(--ink-2); }
+  .nav a .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nav a .warn-dot {
+    font-style: normal; color: var(--amber); background: var(--amber-soft);
+    border: 1px solid var(--amber-line); border-radius: 5px; padding: 0 4px;
+    font-size: 10.5px; font-weight: 600; margin-left: 2px;
+  }
 
-  /* 工具栏 */
+  /* 工具栏：与字段列表同层，不加面板 */
   .toolbar {
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; margin-bottom: 14px;
+    background: transparent; border: none; border-radius: 0;
+    padding: 0; margin-bottom: 14px; box-shadow: none;
   }
-  .toolbar .seg { display: inline-flex; background: #f3f4f6; border-radius: 9px; padding: 3px; }
-  .toolbar .seg button {
-    border: none; background: none; padding: 5px 11px; border-radius: 7px; cursor: pointer;
-    font-size: 12.5px; color: var(--muted);
-  }
-  .toolbar .seg button.on { background: #fff; color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
-  .toolbar .spacer { flex: 1; }
-  .toolbar select { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; background: #fff; font-size: 12.5px; color: #374151; }
 
-  /* 字段卡片 */
-  section.group { margin-bottom: 22px; }
-  section.group > h3 {
-    margin: 0 0 10px; font-size: 15px; display: flex; align-items: center; gap: 10px;
+  /* 字段列表：用分隔线与左侧状态条区分，不再叠卡片边框 */
+  section.group { margin-bottom: 30px; }
+  .group-head {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    margin: 0 0 4px; padding-bottom: 8px; border-bottom: 1px solid var(--line);
   }
-  section.group > h3 .n { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .group-head h3 {
+    margin: 0; font-family: var(--font-serif);
+    font-size: 18px; font-weight: 400; letter-spacing: -0.01em;
+  }
+  .group-stat { font-size: 12.5px; color: var(--muted); }
+  .group-stat b { color: var(--amber); font-weight: 600; }
+  .pager { display: flex; justify-content: space-between; gap: 12px; margin-top: 18px; }
+
   .field {
-    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-    padding: 13px 15px; transition: border-color .15s, box-shadow .15s;
+    position: relative;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--line-soft);
+    border-radius: 0;
+    padding: 14px 12px 14px 14px;
+    transition: background-color .14s;
+    scroll-margin-top: 20px;
   }
-  .field + .field { margin-top: 10px; }
-  .field:hover { box-shadow: 0 2px 8px rgba(16,24,40,.05); }
-  .field.missing { border-color: #fcd34d; background: #fffdf6; }
-  .field.low { border-color: #fcd34d; }
-  .field.conflict, .field.invalid { border-color: #fca5a5; background: #fffbfb; }
-  .field.accepted, .field.done-mark { border-color: #a7f3d0; }
+  .field::before {
+    content: ""; position: absolute; left: 0; top: 14px; bottom: 14px;
+    width: 2px; border-radius: 2px; background: transparent;
+  }
+  .field + .field { margin-top: 0; }
+  .field:hover { background: var(--surface-2); }
+  .field:focus-within { background: var(--surface-2); }
+
+  /* 状态只占左侧一条细线，正文保持白底，避免整页变成色块 */
+  .field.missing::before { background: #d3ac5f; }
+  .field.low::before { background: #d3ac5f; }
+  .field.conflict::before, .field.invalid::before { background: var(--red); }
+  .field.accepted::before, .field.done-mark::before { background: var(--green); }
 
   .field-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-  .field-head .label { font-weight: 600; font-size: 13.5px; }
-  .field-head .tpl { font-size: 11px; color: var(--muted); background: #f3f4f6; padding: 1px 7px; border-radius: 5px; }
-  .field-head .spacer { flex: 1; }
-  .tag {
-    font-size: 11.5px; padding: 2px 9px; border-radius: 999px; white-space: nowrap;
-    border: 1px solid transparent;
+  .field-head .label { font-weight: 600; font-size: 13.5px; color: var(--ink); }
+  .field-head .tpl {
+    font-size: 10.5px; color: var(--grey-500); background: var(--grey-100);
+    padding: 1px 6px; border-radius: 5px; font-family: ui-monospace, Consolas, monospace;
   }
-  .tag.ok { color: var(--green); background: var(--green-soft); border-color: #a7f3d0; }
-  .tag.low { color: var(--amber); background: var(--amber-soft); border-color: #fde68a; }
-  .tag.missing { color: var(--amber); background: var(--amber-soft); border-color: #fde68a; }
-  .tag.conflict, .tag.invalid { color: var(--red); background: var(--red-soft); border-color: #fecaca; }
-  .tag.work { color: var(--accent); background: var(--accent-soft); border-color: #bfdbfe; }
+  .field-head .spacer { flex: 1; }
+
+  .tag {
+    font-size: 11.5px; padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid transparent; font-weight: 500;
+  }
+  .tag.ok { color: var(--green); background: var(--green-soft); border-color: var(--green-line); }
+  .tag.low { color: var(--amber); background: var(--amber-soft); border-color: var(--amber-line); }
+  .tag.missing { color: var(--amber); background: var(--amber-soft); border-color: var(--amber-line); }
+  .tag.conflict, .tag.invalid { color: var(--red); background: var(--red-soft); border-color: var(--red-line); }
+  .tag.work { color: var(--blue-700); background: var(--blue-50); border-color: var(--blue-200); }
 
   .field input[type=text], .field textarea {
-    width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px;
-    font: inherit; font-size: 13.5px; color: var(--text); background: #fff; resize: vertical;
-    transition: border-color .15s;
+    width: 100%; font-size: 13.5px; resize: vertical; line-height: 1.6;
   }
-  .field input[type=text]:focus, .field textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
-  .field textarea { min-height: 74px; }
-  .field .empty-hint { color: var(--amber); font-size: 12px; margin-top: 4px; }
+  .field textarea { min-height: 76px; }
+  .field .empty-hint { color: var(--amber); font-size: 12px; margin-top: 5px; }
 
-  .evidence { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
-  .evidence summary { cursor: pointer; color: #4b5563; user-select: none; }
-  .evidence summary:hover { color: var(--accent); }
-  .evidence blockquote {
-    margin: 6px 0 0; padding: 8px 11px; background: #f9fafb; border-left: 3px solid #d1d5db;
-    border-radius: 0 7px 7px 0; color: #4b5563; white-space: pre-wrap; word-break: break-word;
+  .hist-hint {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-top: 8px; padding: 6px 10px; border-radius: 8px;
+    background: var(--green-soft); border: 1px dashed var(--green-line);
+    font-size: 12.5px; color: #0a6b48;
   }
-  .evidence .sect { font-size: 11.5px; color: #9ca3af; margin-top: 4px; }
+  .hist-hint b { font-weight: 600; }
+  .hist-hint .src { color: var(--grey-500); }
+  .hist-hint button { margin-left: auto; }
+
+  .sugg-hint {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    margin-top: 8px; padding: 6px 10px; border-radius: 8px;
+    background: var(--amber-soft); border: 1px dashed var(--amber-line);
+    font-size: 12.5px; color: #8a4d0a;
+  }
+  .sugg-hint b { font-weight: 600; }
+  .sugg-hint .src { color: var(--grey-500); }
+  .sugg-hint button { margin-left: auto; }
+
+  /* 原文证据：可折叠，弱化但保持可读 */
+  .evidence { margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+  .evidence summary { cursor: pointer; color: var(--grey-600); user-select: none; width: fit-content; }
+  .evidence summary:hover { color: var(--blue-700); }
+  .evidence blockquote {
+    margin: 6px 0 0; padding: 8px 11px; background: var(--grey-25);
+    border-left: 3px solid var(--grey-300); border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    color: var(--grey-700); white-space: pre-wrap; word-break: break-word;
+  }
+  .evidence .sect { font-size: 11.5px; color: var(--grey-400); margin-top: 4px; }
+
+  .item-list { margin: 0 0 8px; padding-left: 20px; }
+  .item-list li { margin: 5px 0; font-size: 13px; line-height: 1.6; color: var(--grey-700); word-break: break-all; }
 
   .field-actions { display: flex; align-items: center; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
   .field-actions .state { font-size: 11.5px; color: var(--muted); margin-left: auto; }
-  .field-actions .state.changed { color: var(--accent); font-weight: 600; }
-
-  /* 提示条 */
-  .notice {
-    background: var(--accent-soft); border: 1px solid #bfdbfe; color: #1e40af;
-    border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px;
-  }
-  .notice.warn { background: var(--amber-soft); border-color: #fde68a; color: #92400e; }
-  .notice.error { background: var(--red-soft); border-color: #fecaca; color: #991b1b; }
-  .hidden { display: none !important; }
+  .field-actions .state.changed { color: var(--blue-700); font-weight: 600; }
 
   /* 生成完成浮层 */
   .toast {
     position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%);
-    background: #111827; color: #fff; padding: 11px 18px; border-radius: 10px;
-    font-size: 13px; z-index: 99; box-shadow: 0 8px 24px rgba(0,0,0,.22);
+    display: flex; align-items: center; gap: 8px;
+    background: var(--grey-900); color: #fff; padding: 10px 18px; border-radius: var(--r);
+    font-size: 13px; z-index: 99; box-shadow: var(--sh-3);
+    animation: toastIn .22s ease-out;
+  }
+  .toast::before {
+    content: ""; width: 14px; height: 14px; flex: none;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234ade80' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6L9 17l-5-5'/%3E%3C/svg%3E") center / 14px 14px no-repeat;
+  }
+  @keyframes toastIn {
+    from { opacity: 0; transform: translate(-50%, 8px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
   }
 </style>
 </head>
 <body>
+<div class="shell">
+  <main class="main">
+    <div class="main-inner wide">
 
-<header class="top">
-  <div class="top-inner">
-    <div class="brand">
-      <h1>招标文件填写工作台</h1>
-      <p id="fileInfo">正在加载任务…</p>
-    </div>
-    <div class="progress">
-      <div class="bar"><i id="barFill"></i></div>
-      <div class="txt" id="progressText">已就绪 0 / 0</div>
-    </div>
-    <button class="btn ghost" id="btnAcceptAll">全部采纳 AI 值</button>
-    <button class="btn primary" id="btnGenerate">生成招标文件</button>
-  </div>
-</header>
-
-<div class="wrap">
-  <div id="notice" class="notice hidden"></div>
-
-  <div id="loading" class="notice">正在加载抽取结果…</div>
-
-  <div id="app" class="app hidden">
-    <aside class="nav" id="nav"></aside>
-    <main>
-      <div class="toolbar">
-        <div class="seg" id="filterSeg">
-          <button data-f="all" class="on">全部</button>
-          <button data-f="todo">待处理</button>
-          <button data-f="low">低置信</button>
-          <button data-f="missing">缺失</button>
+      <div class="fill-head">
+        <div class="fill-head-main">
+          <h1>填写工作台</h1>
+          <p id="fileInfo">正在加载任务…</p>
         </div>
-        <div class="spacer"></div>
-        <label style="font-size:12.5px;color:#4b5563;display:inline-flex;align-items:center;gap:6px">
-          缺失字段
-          <select id="missingMode">
-            <option value="mark">标记「待补充」</option>
-            <option value="empty">留空</option>
-          </select>
-        </label>
+        <div class="fill-head-actions">
+          <button class="btn ghost" id="btnAcceptAll">全部采纳 AI 值</button>
+          <button class="btn primary" id="btnGenerate">生成招标文件</button>
+        </div>
       </div>
-      <div id="groups"></div>
-    </main>
-  </div>
+
+      <div class="progress">
+        <div class="bar"><i id="barFill"></i></div>
+        <div class="txt" id="progressText">已就绪 0 / 0</div>
+      </div>
+
+      <div id="notice" class="notice hidden"></div>
+
+      <div id="loading" class="notice">正在加载抽取结果…</div>
+
+      <div id="app" class="app hidden">
+        <aside class="nav" id="nav"></aside>
+        <div class="fill-body">
+          <div class="toolbar">
+            <div class="seg" id="filterSeg">
+              <button data-f="all" class="on">全部</button>
+              <button data-f="todo">待处理</button>
+              <button data-f="low">低置信</button>
+              <button data-f="missing">缺失</button>
+            </div>
+            <div class="spacer"></div>
+            <button class="btn small" id="btnSuggest">AI 起草缺失字段</button>
+            <label class="chip">缺失字段
+              <select id="missingMode">
+                <option value="mark">标记「待补充」</option>
+                <option value="empty">留空</option>
+              </select>
+            </label>
+          </div>
+          <div id="groups"></div>
+        </div>
+      </div>
+    </div>
+  </main>
 </div>
 
+<script src="/assets/shell.js"></script>
 <script>
 (function () {
   "use strict";
@@ -209,7 +263,25 @@
   var jobInfo = null;
   var groupsData = [];
   var state = {};          // key -> { mode: 'ai' | 'accepted' | 'edited' | 'cleared', value }
+  var suggestions = {};    // key -> { value, reason, source: 'llm_suggest' }（AI 起草的建议值）
   var filter = "all";
+  var activeGroup = "";    // 当前显示的分组 key（分组切换视图）
+
+  // 清单类只读字段：template 为空，但内容对填写有参考价值，按明细列表展示
+  var READONLY_LISTS = {
+    procurement_target_list: {
+      unit: "项标的",
+      hint: "清单为只读参考；写进招标文件请到「采购标的」字段点「从标的清单导入」。"
+    },
+    star_clauses_summary: {
+      unit: "条实质性条款",
+      hint: "打★的条款不满足即废标，打▲的为重要项；投标前需逐条自查。"
+    },
+    qualification_requirements: {
+      unit: "条资格要求",
+      hint: "投标人需逐条响应并提供证明材料，缺项可能导致资格审查不通过。"
+    }
+  };
 
   var $ = function (id) { return document.getElementById(id); };
 
@@ -270,7 +342,7 @@
     var total = 0, ready = 0;
     groupsData.forEach(function (g) {
       g.items.forEach(function (item) {
-        if (!item.template) return;
+        if (!item.template || item.na) return; // 自主招标不适用字段不进统计
         total += 1;
         var st = state[item.key];
         var val = st ? (st.value || "") : (item.value == null ? "" : String(item.value));
@@ -287,29 +359,43 @@
     $("progressText").textContent = "已就绪 " + c.ready + " / " + c.total + "（" + pct + "%）";
   }
 
+  function groupStats(group) {
+    var total = 0, filled = 0, missing = 0;
+    group.items.forEach(function (item) {
+      if (!item.template) return;
+      total += 1;
+      var st = state[item.key];
+      var val = st ? (st.value || "") : (item.value == null ? "" : String(item.value));
+      if (String(val).trim() === "") missing += 1;
+      else filled += 1;
+    });
+    return { total: total, filled: filled, missing: missing };
+  }
+
   function renderNav() {
     var html = '<h2>字段分组</h2>';
     groupsData.forEach(function (g) {
-      var total = 0, missing = 0;
-      g.items.forEach(function (item) {
-        if (!item.template) return;
-        total += 1;
-        var st = state[item.key];
-        var val = st ? (st.value || "") : (item.value == null ? "" : String(item.value));
-        if (String(val).trim() === "") missing += 1;
-      });
-      html += '<a href="#g-' + esc(g.key) + '" data-g="' + esc(g.key) + '">' +
-        '<span>' + esc(g.label) + '</span>' +
-        '<span class="count">' + (missing ? missing + " 缺" : "完成") + '</span></a>';
+      var stats = groupStats(g);
+      var cls = g.key === activeGroup ? " active" : "";
+      html += '<a href="#g-' + esc(g.key) + '" class="nav-item' + cls + '" data-g="' + esc(g.key) + '">' +
+        '<span class="nm">' + esc(g.label) + '</span>' +
+        '<span class="count">' + stats.filled + "/" + stats.total +
+        (stats.missing ? '<i class="warn-dot">' + stats.missing + "</i>" : "") + '</span></a>';
     });
     $("nav").innerHTML = html;
     $("nav").querySelectorAll("a").forEach(function (a) {
       a.addEventListener("click", function (ev) {
         ev.preventDefault();
-        var target = document.getElementById("g-" + a.dataset.g);
-        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+        setActiveGroup(a.dataset.g);
       });
     });
+  }
+
+  function setActiveGroup(key) {
+    activeGroup = key;
+    renderNav();
+    renderActiveGroup();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function fieldVisible(item) {
@@ -323,19 +409,55 @@
     return true;
   }
 
-  function renderGroups() {
-    var html = "";
-    groupsData.forEach(function (g) {
-      var visible = g.items.filter(function (i) { return i.template && fieldVisible(i); });
-      if (!visible.length) return;
-      html += '<section class="group" id="g-' + esc(g.key) + '">' +
-        '<h3>' + esc(g.label) + ' <span class="n">' + visible.length + ' 个字段</span></h3>';
-      visible.forEach(function (item) { html += fieldHtml(item); });
-      html += "</section>";
+  function renderActiveGroup() {
+    var group = null;
+    for (var i = 0; i < groupsData.length; i += 1) {
+      if (groupsData[i].key === activeGroup) { group = groupsData[i]; break; }
+    }
+    if (!group) {
+      $("groups").innerHTML = '<div class="notice">没有可显示的字段分组。</div>';
+      return;
+    }
+
+    var visible = group.items.filter(function (item) {
+      // 清单类字段（template 为空）作为只读明细展示，有值才显示
+      if (READONLY_LISTS[item.key]) {
+        return !!item.value;
+      }
+      return item.template && fieldVisible(item);
     });
-    if (!html) html = '<div class="notice">当前筛选条件下没有字段。</div>';
+    var stats = groupStats(group);
+    var html = '<section class="group" id="g-' + esc(group.key) + '">' +
+      '<div class="group-head">' +
+        '<h3>' + esc(group.label) + '</h3>' +
+        '<span class="group-stat">本组 ' + stats.total + " 个字段 · 已填 " +
+        stats.filled + (stats.missing ? " · <b>待补 " + stats.missing + "</b>" : "") +
+        "</span>" +
+      "</div>";
+    if (!visible.length) {
+      html += '<div class="notice">当前筛选条件下本组没有字段。</div>';
+    } else {
+      visible.forEach(function (item) { html += fieldHtml(item); });
+    }
+    html += "</section>";
+
+    var index = groupsData.indexOf(group);
+    var prev = index > 0 ? groupsData[index - 1] : null;
+    var next = index < groupsData.length - 1 ? groupsData[index + 1] : null;
+    html += '<div class="pager">' +
+      (prev
+        ? '<button class="btn" data-go="' + esc(prev.key) + '">← ' + esc(prev.label) + "</button>"
+        : "<span></span>") +
+      (next
+        ? '<button class="btn primary" data-go="' + esc(next.key) + '">' + esc(next.label) + " →</button>"
+        : "<span></span>") +
+      "</div>";
+
     $("groups").innerHTML = html;
     bindFieldEvents();
+    $("groups").querySelectorAll("[data-go]").forEach(function (btn) {
+      btn.addEventListener("click", function () { setActiveGroup(btn.dataset.go); });
+    });
     updateProgress();
   }
 
@@ -349,9 +471,57 @@
     else if (s === "conflict" || s === "invalid") cls += " conflict";
     if (st && st.mode === "accepted") cls += " accepted";
 
-    var input = isLongText(value)
-      ? '<textarea data-input rows="3">' + esc(value) + "</textarea>"
+    // 自主招标时代理机构字段不适用
+    if (item.na) {
+      return '<div class="' + cls + '" data-key="' + esc(item.key) + '" data-na="1">' +
+        '<div class="field-head">' +
+          '<span class="label">' + esc(item.label) + "</span>" +
+          '<span class="tpl">不适用</span>' +
+          '<span class="spacer"></span><span class="tag t-mute">自主招标</span>' +
+        "</div>" +
+        '<input type="text" data-input value="" disabled>' +
+        '<div class="empty-hint">本项目为自主（自行）招标，无需填写代理机构信息。</div>' +
+        "</div>";
+    }
+
+    // 清单类字段：只读展示已识别的明细（标的清单 / 实质性条款 / 资格要求）
+    if (READONLY_LISTS[item.key] && value) {
+      var listLines = String(value).split("\n").filter(function (l) { return l.trim(); });
+      var listMeta = READONLY_LISTS[item.key];
+      var listItems = listLines.map(function (line) {
+        return "<li>" + esc(line) + "</li>";
+      }).join("");
+      return '<div class="field" data-key="' + esc(item.key) + '">' +
+        '<div class="field-head">' +
+          '<span class="label">' + esc(item.label) + "</span>" +
+          '<span class="tpl">已识别 ' + listLines.length + " " + listMeta.unit + "</span>" +
+          '<span class="spacer"></span><span class="tag t-ok">自动识别</span>' +
+        "</div>" +
+        '<ol class="item-list">' + listItems + "</ol>" +
+        '<div class="empty-hint">' + listMeta.hint + "</div>" +
+        "</div>";
+    }
+
+    // 采购标的支持多项：每行一个标的
+    var multiTarget = item.key === "procurement_target";
+    var input = multiTarget || isLongText(value)
+      ? '<textarea data-input rows="' + (multiTarget ? 4 : 3) + '">' + esc(value) + "</textarea>"
       : '<input type="text" data-input value="' + esc(value) + '">';
+
+    var targetHint = "";
+    if (multiTarget) {
+      targetHint = '<div class="empty-hint">可多项：每行填一个标的。</div>';
+      var listField = groupsData
+        ? (groupsData.groups || []).flatMap(function (g) { return g.items; })
+          .filter(function (it) { return it.key === "procurement_target_list"; })[0]
+        : null;
+      if (listField && listField.value) {
+        targetHint += '<div class="hist-hint">已识别 ' +
+          esc(listField.value.split("\n").filter(function (l) { return l.trim(); }).length) +
+          " 项标的，可从清单一键导入" +
+          '<button class="btn small" data-act="import-list">从标的清单导入</button></div>';
+      }
+    }
 
     var evidence = "";
     if (item.evidence && item.evidence.length) {
@@ -368,16 +538,38 @@
     else if (item.warnings && item.warnings.length) warn = '<div class="empty-hint">' + esc(item.warnings.join("；")) + "</div>";
     else if (s === "missing") warn = '<div class="empty-hint">AI 没有从需求报告里找到这项，请手动填写或留空。</div>';
 
-    var tplBadge = item.template ? '<span class="tpl">' + esc(item.template) + "</span>" : '<span class="tpl">不写入模板</span>';
+    // 模板占位符与字段名相同时不再重复展示，只保留真正有差异的信息
+    var tplText = String(item.template || "").trim();
+    var tplBadge = !tplText
+      ? '<span class="tpl">不写入模板</span>'
+      : (tplText === String(item.label || "").trim() ? "" : '<span class="tpl">' + esc(tplText) + "</span>");
     var aiValue = item.value == null ? "" : String(item.value);
     var cur = confirmState(item.key);
+
+    // 字段为空且历史填过：给出「上次填」建议（字段资产复利）
+    var hist = "";
+    if (item.history && !value) {
+      var from = item.history.updated_at ? String(item.history.updated_at).slice(0, 10) : "";
+      hist = '<div class="hist-hint">上次填写：<b>' + esc(item.history.value) + "</b>" +
+        (from ? '<span class="src">（' + esc(from) + "）</span>" : "") +
+        '<button class="btn small" data-act="use-hist">采用</button></div>';
+    }
+
+    // AI 起草的建议值（suggested）：黄色提示，采纳后才写入
+    var sugg = "";
+    var sv = suggestions[item.key];
+    if (sv && !value && !(st && st.value)) {
+      sugg = '<div class="sugg-hint">AI 建议（需人工确认）：<b>' + esc(sv.value) + "</b>" +
+        (sv.reason ? '<span class="src">' + esc(sv.reason) + "</span>" : "") +
+        '<button class="btn small" data-act="use-sugg">采纳建议</button></div>';
+    }
 
     return '<div class="' + cls + '" data-key="' + esc(item.key) + '" data-template="' + esc(item.template || "") + '">' +
       '<div class="field-head">' +
         '<span class="label">' + esc(item.label) + "</span>" + tplBadge +
         '<span class="spacer"></span>' + statusTag(item) +
       "</div>" +
-      input + warn + evidence +
+      input + targetHint + warn + hist + sugg + evidence +
       '<div class="field-actions">' +
         '<button class="btn small" data-act="accept"' + (aiValue ? "" : " disabled") + ">采纳 AI 值</button>" +
         '<button class="btn small ghost" data-act="clear">清空</button>' +
@@ -397,6 +589,9 @@
     $("groups").querySelectorAll(".field").forEach(function (el) {
       var key = el.dataset.key;
       var input = el.querySelector("[data-input]");
+
+      // 纯展示字段（如采购标的清单）没有可编辑输入，跳过输入与按钮绑定
+      if (!input) return;
 
       input.addEventListener("input", function () {
         state[key] = state[key] || {};
@@ -431,6 +626,56 @@
         syncStateLabel(el, "已清空");
         updateProgress();
       });
+
+      var histBtn = el.querySelector('[data-act="use-hist"]');
+      if (histBtn) {
+        histBtn.addEventListener("click", function () {
+          var orig = findItem(key);
+          var past = orig && orig.history ? String(orig.history.value) : "";
+          if (!past) return;
+          input.value = past;
+          state[key] = { value: past, mode: "history" };
+          el.classList.remove("missing");
+          syncStateLabel(el, "已采用历史值");
+          if (histBtn.parentNode) histBtn.parentNode.remove();
+          updateProgress();
+        });
+      }
+
+      var suggBtn = el.querySelector('[data-act="use-sugg"]');
+      if (suggBtn) {
+        suggBtn.addEventListener("click", function () {
+          var sv = suggestions[key];
+          if (!sv) return;
+          input.value = sv.value;
+          state[key] = { value: sv.value, mode: "edited" };
+          el.classList.remove("missing");
+          syncStateLabel(el, "已采纳 AI 建议");
+          if (suggBtn.parentNode) suggBtn.parentNode.remove();
+          updateProgress();
+        });
+      }
+
+      var importBtn = el.querySelector('[data-act="import-list"]');
+      if (importBtn) {
+        importBtn.addEventListener("click", function () {
+          var listField = (groupsData.groups || []).flatMap(function (g) { return g.items; })
+            .filter(function (it) { return it.key === "procurement_target_list"; })[0];
+          var raw = listField && listField.value ? String(listField.value) : "";
+          var names = raw.split("\n").map(function (line) {
+            // 「1. 名称（数量…）：要求」→ 取名称部分
+            var part = line.replace(/^\s*\d+[.、)）]\s*/, "");
+            return (part.split(/[（(：:]/, 1)[0] || "").trim();
+          }).filter(function (n) { return n; });
+          if (!names.length) return;
+          input.value = Array.from(new Set(names)).join("\n");
+          state[key] = { value: input.value, mode: "edited" };
+          el.classList.remove("missing");
+          syncStateLabel(el, "已导入标的清单");
+          if (importBtn.parentNode) importBtn.parentNode.remove();
+          updateProgress();
+        });
+      }
     });
   }
 
@@ -517,18 +762,21 @@
       if (!res.ok) throw new Error("读取字段失败");
       var data = await res.json();
       groupsData = data.groups || [];
+      if (groupsData.length && !activeGroup) activeGroup = groupsData[0].key;
 
       $("loading").classList.add("hidden");
       $("app").classList.remove("hidden");
       renderNav();
-      renderGroups();
+      renderActiveGroup();
 
-      if (data.missing) {
-        notice("AI 从需求报告中抽取了 " + (data.total - data.missing) + " / " + data.total +
-          " 个字段。缺失的 " + data.missing + " 项请手动补充，确认无误后点击右上角「生成招标文件」。");
-      } else {
-        notice("全部 " + data.total + " 个字段已抽取完成，请逐项核对后生成招标文件。");
+      var msg = data.missing
+        ? "已抽取 " + (data.total - data.missing) + " / " + data.total + " 个字段，其余 " +
+          data.missing + " 项待手动补充。"
+        : "全部 " + data.total + " 个字段已抽取，请逐项核对。";
+      if (data.history_count) {
+        msg += " 另有 " + data.history_count + " 项可复用你以前填过的值（绿色提示条点「采用」即填）。";
       }
+      notice(msg);
     } catch (err) {
       $("loading").classList.add("hidden");
       notice("加载失败：" + err.message, "error");
@@ -541,7 +789,7 @@
     if (!btn) return;
     filter = btn.dataset.f;
     this.querySelectorAll("button").forEach(function (b) { b.classList.toggle("on", b === btn); });
-    renderGroups();
+    renderActiveGroup();
   });
 
   $("btnAcceptAll").addEventListener("click", function () {
@@ -552,11 +800,39 @@
       });
     });
     renderNav();
-    renderGroups();
+    renderActiveGroup();
     toast("已采纳全部 AI 抽取值");
   });
 
   $("btnGenerate").addEventListener("click", generate);
+
+  // AI 起草缺失字段（suggested）：只生成建议，不写入抽取结果，采纳才生效
+  $("btnSuggest").addEventListener("click", function () {
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = "起草中…";
+    fetch("/api/jobs/" + jobId + "/suggest", { method: "POST" })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          if (!r.ok) throw new Error(data.error || ("请求失败 " + r.status));
+          return data;
+        });
+      })
+      .then(function (data) {
+        suggestions = data.suggestions || {};
+        renderActiveGroup();
+        toast(data.count
+          ? "已起草 " + data.count + " 条建议值（黄色提示条），逐条确认后采纳"
+          : (data.note || "没有需要起草的字段"));
+      })
+      .catch(function (err) {
+        toast("起草失败：" + (err.message || err));
+      })
+      .finally(function () {
+        btn.disabled = false;
+        btn.textContent = "AI 起草缺失字段";
+      });
+  });
 
   load();
 })();

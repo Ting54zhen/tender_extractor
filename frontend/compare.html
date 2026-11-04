@@ -4,136 +4,49 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>双文档符合性比对</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%232563eb'/%3E%3Cpath%20d='M10%207h8l5%205v13a1%201%200%200%201-1%201H10a1%201%200%200%201-1-1V8a1%201%200%200%201%201-1z'%20fill='%23fff'/%3E%3Cpath%20d='M18%207v5h5'%20fill='%23c2d8ff'/%3E%3Cpath%20d='M12.5%2016h7M12.5%2019.5h4.5'%20stroke='%232563eb'%20stroke-width='1.4'%20stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/app.css">
 <style>
-  :root {
-    --bg: #f5f6f8;
-    --card: #ffffff;
-    --line: #e5e7eb;
-    --text: #111827;
-    --muted: #6b7280;
-    --accent: #2563eb;
-    --accent-soft: #eff6ff;
-    --green: #059669;
-    --green-soft: #ecfdf5;
-    --amber: #b45309;
-    --amber-soft: #fffbeb;
-    --red: #dc2626;
-    --red-soft: #fef2f2;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 14px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-  }
-  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 64px; }
-  header.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
-  .brand h1 { margin: 0; font-size: 19px; letter-spacing: .2px; }
-  .brand p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
-  .badge {
-    display: inline-flex; align-items: center; gap: 7px;
-    padding: 5px 11px; border-radius: 999px; font-size: 12.5px;
-    border: 1px solid var(--line); background: #fff; color: var(--muted);
-  }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: #9ca3af; }
-  .badge.ok { color: var(--green); background: var(--green-soft); border-color: #a7f3d0; }
-  .badge.ok .dot { background: var(--green); }
-  .badge.bad { color: var(--red); background: var(--red-soft); border-color: #fecaca; }
-  .badge.bad .dot { background: var(--red); }
-  .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-    padding: 20px; box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
-  }
-  .card + .card { margin-top: 16px; }
+  /* 本页专属：左右双栏上传、逐条判定标签、报告折叠区 */
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 780px) { .grid2 { grid-template-columns: 1fr; } }
-  .label { font-weight: 600; margin-bottom: 8px; }
+  .label { font-weight: 600; margin-bottom: 8px; font-size: 13px; color: var(--grey-800); }
   .label small { color: var(--muted); font-weight: 400; margin-left: 6px; }
-  .dropzone {
-    border: 1.5px dashed #cbd5e1; border-radius: 12px; padding: 26px 18px;
-    text-align: center; cursor: pointer; transition: .15s; background: #fcfcfd;
-  }
-  .dropzone:hover, .dropzone.over { border-color: var(--accent); background: var(--accent-soft); }
-  .dropzone.filled { border-style: solid; border-color: #a7f3d0; background: var(--green-soft); }
-  .dropzone .big { font-size: 14.5px; font-weight: 600; margin-bottom: 4px; }
-  .dropzone .hint { color: var(--muted); font-size: 12.5px; word-break: break-all; }
-  .options { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; margin-top: 16px; }
-  .options label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: #374151; }
-  .actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
-  .btn {
-    border: 1px solid var(--line); background: #fff; color: var(--text);
-    padding: 9px 16px; border-radius: 9px; font-size: 13.5px; cursor: pointer;
-    display: inline-flex; align-items: center; gap: 7px; text-decoration: none;
-    transition: .15s;
-  }
-  .btn:hover { border-color: #cbd5e1; background: #fafafa; }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-  .btn.primary:hover { background: #1d4ed8; border-color: #1d4ed8; }
-  .btn.primary:disabled { background: #93b4f8; border-color: #93b4f8; cursor: not-allowed; }
-  .btn.small { padding: 6px 11px; font-size: 12.5px; }
-  .hintline { color: var(--muted); font-size: 12.5px; }
-  .status { display: none; }
-  .status.show { display: block; }
-  .status .row { display: flex; align-items: center; gap: 12px; }
-  .status .row .grow { flex: 1; }
-  .spinner {
-    width: 16px; height: 16px; border-radius: 50%; flex: none;
-    border: 2px solid #dbeafe; border-top-color: var(--accent);
-    animation: spin .8s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .bar { height: 4px; border-radius: 999px; background: #eef2f7; margin-top: 14px; overflow: hidden; }
-  .bar i { display: block; height: 100%; width: 35%; border-radius: 999px; background: var(--accent); animation: slide 1.4s ease-in-out infinite; }
-  @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
-  .alert { border-radius: 10px; padding: 12px 14px; font-size: 13px; }
-  .alert[hidden] { display: none; }
-  .alert.error { background: var(--red-soft); border: 1px solid #fecaca; color: #991b1b; }
-  .alert.warn { background: var(--amber-soft); border: 1px solid #fde68a; color: #92400e; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 18px; }
-  .stat { border: 1px solid var(--line); border-radius: 11px; padding: 11px 14px; background: #fcfcfd; }
-  .stat .k { color: var(--muted); font-size: 12px; }
-  .stat .v { font-size: 19px; font-weight: 650; margin-top: 2px; }
-  .tbl-wrap { overflow-x: auto; }
-  .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .tbl th {
-    text-align: left; font-weight: 600; color: var(--muted); font-size: 12px;
-    padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; background: #fbfbfc;
-  }
-  .tbl td { padding: 9px 10px; border-bottom: 1px solid #f1f2f4; vertical-align: top; }
-  .tbl tr:last-child td { border-bottom: none; }
-  .tbl .idx { color: var(--muted); white-space: nowrap; }
+  .grid2 .dropzone { padding: 22px 16px; }
+  .dropzone .hint { word-break: break-all; }
+
   .verdict {
-    display: inline-block; padding: 2px 9px; border-radius: 999px;
-    font-size: 12px; font-weight: 600; white-space: nowrap;
+    display: inline-flex; align-items: center; padding: 1px 9px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; white-space: nowrap; border: 1px solid transparent;
   }
-  .verdict.satisfied { color: var(--green); background: var(--green-soft); border: 1px solid #a7f3d0; }
-  .verdict.partial { color: var(--amber); background: var(--amber-soft); border: 1px solid #fde68a; }
-  .verdict.missing { color: var(--red); background: var(--red-soft); border: 1px solid #fecaca; }
+  .verdict.satisfied { color: var(--green); background: var(--green-soft); border-color: var(--green-line); }
+  .verdict.partial { color: var(--amber); background: var(--amber-soft); border-color: var(--amber-line); }
+  .verdict.missing { color: var(--red); background: var(--red-soft); border-color: var(--red-line); }
   .cell-sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
-  details { margin-top: 18px; }
-  summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+
+  details { margin-top: 16px; }
+  summary { cursor: pointer; color: var(--blue-700); font-size: 13px; width: fit-content; }
+  summary:hover { text-decoration: underline; }
   pre {
-    background: #0f172a; color: #e2e8f0; padding: 16px; border-radius: 10px;
-    overflow: auto; font-size: 12.5px; line-height: 1.6; margin-top: 10px;
+    background: #12161f; color: #dbe3ef; padding: 16px; border-radius: var(--r);
+    overflow: auto; font-size: 12.5px; line-height: 1.7; margin-top: 10px;
   }
-  .hidden { display: none !important; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header class="top">
-    <div class="brand">
-      <h1>双文档符合性比对</h1>
-      <p>招标要求 vs 投标响应 · 逐条判定 · 证据回链</p>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <span class="badge" id="health-badge"><span class="dot"></span><span id="health-text">检查模型…</span></span>
-      <a class="btn small" href="/">单文档解析</a>
-    </div>
-  </header>
+<div class="shell">
+  <main class="main">
+    <div class="main-inner">
+      <div class="page-top">
+        <span class="badge" id="health-badge"><span class="dot"></span><span id="health-text">检查模型…</span></span>
+      </div>
 
-  <section class="card">
+      <div class="page-head">
+        <h1>双文档符合性比对</h1>
+        <p>招标要求 vs 投标响应 · 逐条判定 · 证据回链</p>
+      </div>
+
+      <section class="card">
     <div class="grid2">
       <div>
         <div class="label">招标文件<small>要求什么</small></div>
@@ -199,9 +112,12 @@
       <summary>查看完整比对报告（Markdown）</summary>
       <pre id="report"></pre>
     </details>
-  </section>
+      </section>
+    </div>
+  </main>
 </div>
 
+<script src="/assets/shell.js"></script>
 <script>
 (function () {
   "use strict";

@@ -7,10 +7,37 @@
 
 | 文件 | 页面 | 功能 |
 |------|------|------|
-| `index.html` | 主页面 | 上传采购需求报告，查看结构化字段、复核清单、模板映射与审核报告 |
-| `compare.html` | 比对页面 | L2 双文档比对：上传招标文件 + 投标文件，查看符合性比对结果 |
+| `app.css` | 全站 | 设计系统：色板、排版、按钮、表格、表单、卡片与响应式规则 |
+| `shell.js` | 全站 | 注入左侧导航外壳（品牌、主操作、六个入口、本机状态） |
+| `index.html` | 需求解析 | 上传采购需求报告，查看结构化字段、复核清单、模板映射与审核报告 |
+| `fill.html` | 填写工作台 | 逐字段核对 / 编辑，按分组导航，生成招标文件 |
+| `compare.html` | 文档比对 | L2 双文档比对：上传招标文件 + 投标文件，查看符合性比对结果 |
+| `projects.html` · `projects.js` · `projects.css` | 项目工作台 | 按采购项目归档任务、查看历史结果、归档与恢复 |
+| `company.html` · `company.js` | 企业档案 | 维护资质、业绩、人员与证明材料索引 |
+| `settings.html` · `settings.js` | 设置 | 模型接入、第三方复核、抽取阈值与输出目录的可视化覆盖 |
 
-技术形态：纯 HTML/CSS/JS 单文件（无 CDN、无构建工具），直接改源码即可生效。
+技术形态：纯 HTML/CSS/JS（无 CDN、无构建工具、无运行时依赖），直接改源码即可生效。
+
+## 页面骨架
+
+新增页面时复制这套骨架即可获得统一的左侧导航与视觉规范（样式全部来自 `app.css`，不要另写一套配色）：
+
+```html
+<link rel="stylesheet" href="/assets/app.css">
+...
+<div class="shell">
+  <main class="main">
+    <div class="main-inner">
+      <div class="page-head"><h1>页面标题</h1><p>一句话说明</p></div>
+      <!-- 页面内容 -->
+    </div>
+  </main>
+</div>
+<script src="/assets/shell.js"></script>
+```
+
+`main-inner` 的变体：`wide`（1320，工作台类页面）、`narrow`（820，设置类表单）。
+图标一律用内联 SVG，不引入图标库；衬线标题走 `--font-serif`，正文走 `--font-sans`。
 
 ## 本地预览
 

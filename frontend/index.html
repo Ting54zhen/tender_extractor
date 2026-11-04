@@ -4,202 +4,62 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>招标需求解析</title>
-<style>
-  :root {
-    --bg: #f5f6f8;
-    --card: #ffffff;
-    --line: #e5e7eb;
-    --text: #111827;
-    --muted: #6b7280;
-    --accent: #2563eb;
-    --accent-soft: #eff6ff;
-    --green: #059669;
-    --green-soft: #ecfdf5;
-    --amber: #b45309;
-    --amber-soft: #fffbeb;
-    --red: #dc2626;
-    --red-soft: #fef2f2;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 14px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-  }
-  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 64px; }
-  header.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
-  .brand h1 { margin: 0; font-size: 19px; letter-spacing: .2px; }
-  .brand p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
-  .badge {
-    display: inline-flex; align-items: center; gap: 7px;
-    padding: 5px 11px; border-radius: 999px; font-size: 12.5px;
-    border: 1px solid var(--line); background: #fff; color: var(--muted);
-  }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: #9ca3af; }
-  .badge.ok { color: var(--green); background: var(--green-soft); border-color: #a7f3d0; }
-  .badge.ok .dot { background: var(--green); }
-  .badge.bad { color: var(--red); background: var(--red-soft); border-color: #fecaca; }
-  .badge.bad .dot { background: var(--red); }
-  .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-    padding: 20px; box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
-  }
-  .card + .card { margin-top: 16px; }
-  .dropzone {
-    border: 1.5px dashed #cbd5e1; border-radius: 12px; padding: 30px 20px;
-    text-align: center; cursor: pointer; transition: .15s; background: #fcfcfd;
-  }
-  .dropzone:hover, .dropzone.over { border-color: var(--accent); background: var(--accent-soft); }
-  .dropzone .big { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
-  .dropzone .hint { color: var(--muted); font-size: 12.5px; }
-  .filebar {
-    display: none; align-items: center; gap: 12px; margin-top: 12px;
-    padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fafafa;
-  }
-  .filebar.show { display: flex; }
-  .filebar .name { font-weight: 600; word-break: break-all; }
-  .filebar .size { color: var(--muted); font-size: 12.5px; margin-left: auto; white-space: nowrap; }
-  .filebar .clear { border: none; background: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; }
-  .filebar .clear:hover { color: var(--red); }
-  .options { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; margin-top: 16px; }
-  .options label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: #374151; }
-  .options .sep { color: var(--line); }
-  .actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
-  .btn {
-    border: 1px solid var(--line); background: #fff; color: var(--text);
-    padding: 9px 16px; border-radius: 9px; font-size: 13.5px; cursor: pointer;
-    display: inline-flex; align-items: center; gap: 7px; text-decoration: none;
-    transition: .15s;
-  }
-  .btn:hover { border-color: #cbd5e1; background: #fafafa; }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-  .btn.primary:hover { background: #1d4ed8; border-color: #1d4ed8; }
-  .btn.primary:disabled { background: #93b4f8; border-color: #93b4f8; cursor: not-allowed; }
-  .btn.small { padding: 6px 11px; font-size: 12.5px; }
-  .hintline { color: var(--muted); font-size: 12.5px; }
-  .status { display: none; }
-  .status.show { display: block; }
-  .status .row { display: flex; align-items: center; gap: 12px; }
-  .spinner {
-    width: 16px; height: 16px; border-radius: 50%; flex: none;
-    border: 2px solid #dbeafe; border-top-color: var(--accent);
-    animation: spin .8s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .bar { height: 4px; border-radius: 999px; background: #eef2f7; margin-top: 14px; overflow: hidden; }
-  .bar i { display: block; height: 100%; width: 35%; border-radius: 999px; background: var(--accent); animation: slide 1.4s ease-in-out infinite; }
-  @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
-  .alert { border-radius: 10px; padding: 12px 14px; font-size: 13px; display: flex; gap: 10px; align-items: flex-start; }
-  .alert.error { background: var(--red-soft); border: 1px solid #fecaca; color: #991b1b; }
-  .alert.warn { background: var(--amber-soft); border: 1px solid #fde68a; color: #92400e; }
-  .alert .grow { flex: 1; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 18px; }
-  .stat { border: 1px solid var(--line); border-radius: 11px; padding: 11px 14px; background: #fcfcfd; }
-  .stat .k { color: var(--muted); font-size: 12px; }
-  .stat .v { font-size: 19px; font-weight: 650; margin-top: 2px; }
-  .stat .v small { font-size: 12px; color: var(--muted); font-weight: 400; }
-  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
-  .toolbar .spacer { flex: 1; }
-  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; flex-wrap: wrap; }
-  .tabs button {
-    border: none; background: none; padding: 9px 14px; cursor: pointer; font-size: 13.5px;
-    color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px;
-  }
-  .tabs button:hover { color: var(--text); }
-  .tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
-  .pane { display: none; }
-  .pane.active { display: block; }
-  .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-  .tbl th {
-    text-align: left; font-weight: 600; color: var(--muted); font-size: 12px;
-    padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; background: #fbfbfc;
-  }
-  .tbl td { padding: 9px 10px; border-bottom: 1px solid #f1f2f4; vertical-align: top; }
-  .tbl tr:last-child td { border-bottom: none; }
-  .tbl tr.dim td { color: #9ca3af; }
-  .val { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; word-break: break-all; }
-  .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; white-space: nowrap; }
-  .t-ok { background: var(--green-soft); color: var(--green); }
-  .t-low { background: var(--amber-soft); color: var(--amber); }
-  .t-warn { background: #fff7ed; color: #c2410c; }
-  .t-bad { background: var(--red-soft); color: var(--red); }
-  .t-mute { background: #f3f4f6; color: #6b7280; }
-  .t-info { background: #eef2ff; color: #4338ca; }
-  .ev { color: var(--muted); font-size: 12px; margin-top: 3px; }
-  .ev b { color: #9ca3af; font-weight: 500; }
-  .review-item { border-left: 3px solid var(--line); padding: 8px 0 8px 12px; margin-bottom: 12px; }
-  .review-item.high { border-color: var(--red); }
-  .review-item.medium { border-color: #f59e0b; }
-  .review-item.low { border-color: #10b981; }
-  .review-item .head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .review-item .issue { color: #374151; font-size: 13px; margin-top: 3px; }
-  .review-item .cur { color: var(--muted); font-size: 12.5px; }
-  .empty { color: var(--muted); text-align: center; padding: 28px 0; font-size: 13px; }
-  .kv { display: grid; grid-template-columns: minmax(150px, 240px) 1fr; gap: 0; font-size: 13px; }
-  .kv div { padding: 8px 10px; border-bottom: 1px solid #f1f2f4; }
-  .kv .k { color: var(--muted); background: #fbfbfc; }
-  .hidden { display: none !important; }
-  .md { font-size: 13.5px; max-width: 900px; }
-  .md h1, .md h2, .md h3 { line-height: 1.4; margin: 22px 0 10px; }
-  .md h1 { font-size: 19px; }
-  .md h2 { font-size: 16px; border-left: 3px solid var(--accent); padding-left: 9px; }
-  .md h3 { font-size: 14px; }
-  .md p { margin: 8px 0; }
-  .md ul { margin: 8px 0; padding-left: 22px; }
-  .md li { margin: 3px 0; }
-  .md table { border-collapse: collapse; margin: 10px 0; font-size: 12.5px; }
-  .md th, .md td { border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top; }
-  .md th { background: #fbfbfc; color: var(--muted); font-weight: 600; }
-  .md code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
-  .md hr { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
-  .md blockquote { margin: 10px 0; padding: 8px 12px; background: #f9fafb; border-left: 3px solid var(--line); color: #4b5563; }
-  footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 28px; }
-  @media (max-width: 720px) {
-    .wrap { padding: 16px 12px 48px; }
-    .kv { grid-template-columns: 1fr; }
-    .kv .k { border-bottom: none; padding-bottom: 0; }
-  }
-</style>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%232563eb'/%3E%3Cpath%20d='M10%207h8l5%205v13a1%201%200%200%201-1%201H10a1%201%200%200%201-1-1V8a1%201%200%200%201%201-1z'%20fill='%23fff'/%3E%3Cpath%20d='M18%207v5h5'%20fill='%23c2d8ff'/%3E%3Cpath%20d='M12.5%2016h7M12.5%2019.5h4.5'%20stroke='%232563eb'%20stroke-width='1.4'%20stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
-<div class="wrap">
-  <header class="top">
-    <div class="brand">
-      <h1>招标需求解析</h1>
-      <p>上传采购需求报告，输出结构化字段、模板占位符与审核报告</p>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px">
-      <span class="badge" id="health"><span class="dot"></span><span id="health-text">检测模型中…</span></span>
-      <button class="btn small" id="refresh-health">重新检测</button>
-    </div>
-  </header>
+<div class="shell">
+  <main class="main">
+    <div class="main-inner">
 
-  <section class="card">
-    <div class="dropzone" id="drop">
-      <div class="big">把文件拖到这里，或点击选择</div>
-      <div class="hint">支持 .docx / .pdf / .txt，单个文件不超过 50MB</div>
-      <input type="file" id="file" accept=".docx,.pdf,.txt" hidden>
-    </div>
+      <div class="page-top">
+        <span class="badge" id="health"><span class="dot"></span><span id="health-text">检测模型中…</span></span>
+        <button class="btn small" id="refresh-health">重新检测</button>
+      </div>
 
-    <div class="filebar" id="filebar">
-      <span class="name" id="file-name"></span>
-      <span class="size" id="file-size"></span>
-      <button class="clear" id="file-clear" title="移除">&times;</button>
-    </div>
+      <section class="hero">
+        <h1 class="hero-title">描述你的采购需求，<br>剩下的交给它</h1>
+        <p class="hero-sub">上传采购需求报告，自动抽取结构化字段、生成可编辑的招标文件。<br>每一条结论都能回到原文证据。</p>
 
-    <div class="options">
-      <label><input type="radio" name="mode" value="full" checked> 完整链路（规则 + 本地模型）</label>
-      <span class="sep">|</span>
-      <label><input type="radio" name="mode" value="rules"> 仅规则（不调用模型，更快）</label>
-      <label><input type="checkbox" id="force"> 强制抽取（跳过文档类型校验）</label>
-    </div>
+        <div class="composer">
+          <div class="dropzone" id="drop">
+            <div class="big">把需求报告拖到这里，或点击选择文件</div>
+            <div class="hint">支持 .docx / .pdf / .txt · 单个文件不超过 50MB</div>
+            <input type="file" id="file" accept=".docx,.pdf,.txt" hidden>
+          </div>
 
-    <div class="actions">
-      <button class="btn primary" id="run" disabled>开始解析</button>
-      <span class="hintline" id="run-hint">先选择一份需求报告</span>
-    </div>
-  </section>
+          <div class="filebar" id="filebar">
+            <span class="name" id="file-name"></span>
+            <span class="size" id="file-size"></span>
+            <button class="clear" id="file-clear" title="移除">&times;</button>
+          </div>
+
+          <div class="composer-bar">
+            <label class="chip">项目
+              <select id="project">
+                <option value="">（不归属项目）</option>
+              </select>
+            </label>
+            <div class="seg-pill">
+              <label><input type="radio" name="mode" value="full" checked><span>完整链路</span></label>
+              <label><input type="radio" name="mode" value="rules"><span>仅规则</span></label>
+            </div>
+            <label class="check"><input type="checkbox" id="force"> 强制抽取</label>
+            <span class="hintline" id="run-hint">先选择一份需求报告</span>
+            <button class="send" id="run" disabled title="开始解析" aria-label="开始解析">
+              <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="sugg-tabs" id="sugg-tabs">
+          <button class="sugg-tab on" data-tab="common">常用</button>
+          <button class="sugg-tab" data-tab="build">生成</button>
+          <button class="sugg-tab" data-tab="check">核对</button>
+          <button class="sugg-tab" data-tab="keep">归档</button>
+        </div>
+        <div class="sugg-grid" id="sugg-grid"></div>
+      </section>
 
   <section class="card status" id="status">
     <div class="row">
@@ -230,9 +90,34 @@
         <button class="btn small" id="dl-json">下载结果 JSON</button>
         <button class="btn small" id="dl-md">下载审核报告</button>
         <button class="btn small hidden" id="dl-draft">下载平台草稿</button>
+        <button class="btn small hidden" id="gen-bid">生成投标书初稿</button>
+        <button class="btn small hidden" id="gen-risk">图谱风险分析</button>
+        <button class="btn small hidden" id="export-pdf">导出 PDF</button>
         <button class="btn small primary hidden" id="go-fill">去填写招标文件 →</button>
         <div class="spacer"></div>
         <span class="hintline" id="result-meta"></span>
+      </div>
+
+      <div class="card hidden" id="bid-result" style="margin-top:14px">
+        <div class="toolbar">
+          <b>投标书初稿</b>
+          <div class="spacer"></div>
+          <span class="hintline" id="bid-summary"></span>
+          <button class="btn small" id="dl-bid">下载投标书 .md</button>
+        </div>
+        <div id="bid-gaps"></div>
+        <div class="md" id="bid-md"></div>
+      </div>
+
+      <div class="card hidden" id="risk-result" style="margin-top:14px">
+        <div class="toolbar">
+          <b>知识图谱风险分析</b>
+          <div class="spacer"></div>
+          <span class="hintline" id="risk-meta"></span>
+          <button class="btn small" id="dl-turtle">下载图谱 .ttl</button>
+        </div>
+        <div id="graph-svg" style="overflow-x:auto;margin-bottom:12px"></div>
+        <div class="md" id="risk-md"></div>
       </div>
 
       <div class="tabs">
@@ -249,9 +134,12 @@
     </div>
   </section>
 
-  <footer>文档仅在本机处理，不会上传到外部服务</footer>
+      <footer>文档仅在本机处理，不会上传到外部服务</footer>
+    </div>
+  </main>
 </div>
 
+<script src="/assets/shell.js"></script>
 <script>
 (function () {
   "use strict";
@@ -281,6 +169,29 @@
   }
   function tag(label, cls) { return '<span class="tag ' + cls + '">' + esc(label) + "</span>"; }
 
+  // ---------------- 项目选择 ----------------
+  var PROJECT_KEY = "tender.currentProject";
+
+  function loadProjects() {
+    fetch("/api/projects?status=active").then(function (r) { return r.json(); })
+      .then(function (data) {
+        var select = $("project");
+        var current = localStorage.getItem(PROJECT_KEY) || "";
+        select.innerHTML = '<option value="">（不归属项目）</option>' +
+          (data.projects || []).map(function (p) {
+            return '<option value="' + esc(p.id) + '">' + esc(p.name) +
+              "（" + p.job_count + "）</option>";
+          }).join("");
+        select.value = current;
+        if (select.selectedIndex < 0) { select.value = ""; localStorage.removeItem(PROJECT_KEY); }
+      }).catch(function () { /* 项目列表加载失败不影响解析 */ });
+  }
+
+  $("project").addEventListener("change", function () {
+    if (this.value) { localStorage.setItem(PROJECT_KEY, this.value); }
+    else { localStorage.removeItem(PROJECT_KEY); }
+  });
+
   // ---------------- 模型状态 ----------------
   function loadHealth() {
     var badge = $("health");
@@ -289,8 +200,8 @@
     fetch("/api/health").then(function (r) { return r.json(); }).then(function (data) {
       if (data.available) {
         badge.className = "badge ok";
-        $("health-text").textContent = data.provider + " / " + data.model + " 可用";
-        badge.title = data.models && data.models.length ? "可用模型：" + data.models.join("、") : "";
+        $("health-text").textContent = data.provider + " · " + data.model;
+        badge.title = "模型可用" + (data.models && data.models.length ? "，可选模型：" + data.models.join("、") : "");
       } else {
         badge.className = "badge bad";
         $("health-text").textContent = "模型不可用";
@@ -363,7 +274,8 @@
     $("skipped-banner").classList.add("hidden");
     var query = "/api/extract?filename=" + encodeURIComponent(state.file.name) +
       "&use_llm=" + (currentMode() === "full" ? "1" : "0") +
-      "&allow_non_tender=" + (force || $("force").checked ? "1" : "0");
+      "&allow_non_tender=" + (force || $("force").checked ? "1" : "0") +
+      "&project_id=" + encodeURIComponent($("project").value || "");
 
     $("status").classList.add("show");
     $("status-title").textContent = "正在上传…";
@@ -447,11 +359,226 @@
     btn.onclick = ok ? function () {
       window.location.href = "/fill.html?job=" + job.id;
     } : null;
+    var bid = $("gen-bid");
+    bid.classList.toggle("hidden", !ok);
+    bid.onclick = ok ? function () { generateBid(job); } : null;
+    var risk = $("gen-risk");
+    risk.classList.toggle("hidden", !ok);
+    risk.onclick = ok ? function () { analyzeRisk(job); } : null;
+    var pdf = $("export-pdf");
+    pdf.classList.toggle("hidden", !ok);
+    pdf.onclick = ok ? function () { exportPdf(job); } : null;
+  }
+
+  // 通用二进制下载（POST 后 blob 保存）
+  function downloadBinary(url, fallbackName, btn) {
+    if (btn) { btn.disabled = true; }
+    fetch(url, { method: "POST" })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.json().then(function (data) {
+            throw new Error(data.error || ("请求失败 " + r.status));
+          });
+        }
+        var disp = r.headers.get("Content-Disposition") || "";
+        var m = /filename\*=UTF-8''([^;]+)/.exec(disp);
+        var name = m ? decodeURIComponent(m[1]) : fallbackName;
+        return r.blob().then(function (blob) { saveBlob(blob, name); });
+      })
+      .catch(function (err) { showError((err.message || err)); })
+      .finally(function () { if (btn) { btn.disabled = false; } });
+  }
+
+  function saveBlob(blob, name) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function exportPdf(job) {
+    downloadBinary("/api/jobs/" + job.id + "/export/pdf",
+      (job.filename || "招标文件").replace(/\.[^.]+$/, "") + ".pdf", $("export-pdf"));
+  }
+
+  // ---------------- 投标书初稿 ----------------
+  function generateBid(job) {
+    var btn = $("gen-bid");
+    btn.disabled = true;
+    btn.textContent = "生成中…";
+    fetch("/api/jobs/" + job.id + "/bid", { method: "POST" })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          if (!r.ok) throw new Error(data.error || ("请求失败 " + r.status));
+          return data;
+        });
+      })
+      .then(function (data) {
+        renderBid(data);
+      })
+      .catch(function (err) {
+        showError("投标书生成失败：" + (err.message || err));
+      })
+      .finally(function () {
+        btn.disabled = false;
+        btn.textContent = "生成投标书初稿";
+      });
+  }
+
+  function renderBid(data) {
+    $("bid-result").classList.remove("hidden");
+    var s = data.summary || {};
+    $("bid-summary").textContent =
+      "资格响应 " + (s.covered || 0) + "/" + (s.qualifications || 0) +
+      " · 技术方案 " + (s.sections || 0) + " 节 · 缺口 " + (s.gaps || 0) + " 项";
+    var gaps = data.gaps || [];
+    $("bid-gaps").innerHTML = gaps.length
+      ? '<div class="alert warn"><div class="grow"><b>材料缺口 ' + gaps.length +
+        " 项：</b>" + gaps.map(function (g) {
+            return esc(g.requirement) + "→" + esc(g.need);
+          }).join("；") + "</div></div>"
+      : "";
+    $("bid-md").innerHTML = '<div class="md">' + mdToHtml(data.markdown || "") + "</div>";
+    $("dl-bid").onclick = function () {
+      var blob = new Blob([data.markdown || ""], { type: "text/markdown;charset=utf-8" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = (s.project_name || "投标书") + "-投标书初稿.md";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
+    $("bid-result").scrollIntoView({ behavior: "smooth" });
+  }
+
+  // ---------------- 知识图谱风险分析 ----------------
+  function analyzeRisk(job) {
+    var btn = $("gen-risk");
+    btn.disabled = true;
+    btn.textContent = "分析中…";
+    fetch("/api/jobs/" + job.id + "/analyze", { method: "POST" })
+      .then(function (r) {
+        return r.json().then(function (data) {
+          if (!r.ok) throw new Error(data.error || ("请求失败 " + r.status));
+          return data;
+        });
+      })
+      .then(function (data) {
+        renderRisk(data);
+      })
+      .catch(function (err) {
+        showError("图谱分析失败：" + (err.message || err));
+      })
+      .finally(function () {
+        btn.disabled = false;
+        btn.textContent = "图谱风险分析";
+      });
+  }
+
+  function renderRisk(data) {
+    $("risk-result").classList.remove("hidden");
+    var g = data.graph || {};
+    var types = {};
+    (g.nodes || []).forEach(function (n) {
+      types[n.type] = (types[n.type] || 0) + 1;
+    });
+    var note = data.meta && data.meta.error ? " · 注意：" + data.meta.error : "";
+    $("risk-meta").textContent =
+      "节点 " + (g.nodes || []).length + " 个（" +
+      Object.keys(types).map(function (t) { return t + "×" + types[t]; }).join("、") +
+      "）· 关系 " + (g.edges || []).length + " 条" + note;
+    $("graph-svg").innerHTML = renderGraphSvg(g);
+    $("risk-md").innerHTML = '<div class="md">' + mdToHtml(data.knowledge_report || "") + "</div>";
+    $("dl-turtle").onclick = function () {
+      var blob = new Blob([data.turtle || ""], { type: "text/turtle;charset=utf-8" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = (data.project_name || "图谱") + ".ttl";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
+    $("risk-result").scrollIntoView({ behavior: "smooth" });
+  }
+
+  // 按类型分列的简单图谱布局（无第三方库）
+  function renderGraphSvg(g) {
+    var COLUMN_ORDER = [
+      ["Project", "项目"],
+      ["ProcurementItem", "采购标的"],
+      ["Qualification", "资格要求"],
+      ["ScoringCriterion", "评分点"],
+      ["DisqualificationClause", "废标条款"],
+    ];
+    var COLORS = {
+      Project: "#2563eb", ProcurementItem: "#059669", Qualification: "#b45309",
+      ScoringCriterion: "#7c3aed", DisqualificationClause: "#dc2626",
+    };
+    var columns = {};
+    var order = [];
+    (g.nodes || []).forEach(function (n) {
+      if (!columns[n.type]) { columns[n.type] = []; order.push(n.type); }
+      columns[n.type].push(n);
+    });
+    order.sort(function (a, b) {
+      var ia = COLUMN_ORDER.findIndex(function (c) { return c[0] === a; });
+      var ib = COLUMN_ORDER.findIndex(function (c) { return c[0] === b; });
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
+    var pos = {};
+    var COL_W = 240, NODE_H = 44, GAP = 14, MAX_PER_COL = 8;
+    var width = order.length * COL_W + 40;
+    var maxRows = 1;
+    order.forEach(function (type, ci) {
+      var list = columns[type].slice(0, MAX_PER_COL);
+      maxRows = Math.max(maxRows, list.length);
+      list.forEach(function (n, ri) {
+        pos[n.id] = { x: 20 + ci * COL_W, y: 40 + ri * (NODE_H + GAP), type: type, label: n.label };
+      });
+    });
+    var height = 60 + maxRows * (NODE_H + GAP);
+    function esc2(t) {
+      return String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+    var svg = '<svg width="' + width + '" height="' + height + '" style="font:12px sans-serif">';
+    (g.edges || []).forEach(function (e) {
+      var s = pos[e.source], t = pos[e.target];
+      if (!s || !t) return;
+      var x1 = s.x + 190, y1 = s.y + NODE_H / 2, x2 = t.x, y2 = t.y + NODE_H / 2;
+      svg += '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 +
+        '" stroke="#cbd5e1" stroke-width="1.2"><title>' + esc2(e.predicate) + "</title></line>";
+    });
+    order.forEach(function (type, ci) {
+      var list = columns[type].slice(0, MAX_PER_COL);
+      var head = (COLUMN_ORDER.find(function (c) { return c[0] === type; }) || [type, type])[1];
+      svg += '<text x="' + (20 + ci * COL_W) + '" y="24" fill="#6b7280" font-weight="600">' +
+        esc2(head) + "（" + columns[type].length + "）</text>";
+      list.forEach(function (n) {
+        var p = pos[n.id];
+        var color = COLORS[type] || "#6b7280";
+        svg += '<rect x="' + p.x + '" y="' + p.y + '" width="190" height="' + NODE_H +
+          '" rx="9" fill="#fff" stroke="' + color + '" stroke-width="1.4">' +
+          "<title>" + esc2(n.label) + "</title></rect>";
+        var label = n.label.length > 16 ? n.label.slice(0, 15) + "…" : n.label;
+        svg += '<text x="' + (p.x + 10) + '" y="' + (p.y + 20) + '" fill="#111827">' + esc2(label) + "</text>";
+        if (n.properties && n.properties.value) {
+          var v = String(n.properties.value).slice(0, 12);
+          svg += '<text x="' + (p.x + 10) + '" y="' + (p.y + 35) + '" fill="#9ca3af">' + esc2(v) + "</text>";
+        }
+      });
+      if (columns[type].length > MAX_PER_COL) {
+        svg += '<text x="' + (20 + ci * COL_W) + '" y="' + (40 + MAX_PER_COL * (NODE_H + GAP)) +
+          '" fill="#9ca3af">… 另有 ' + (columns[type].length - MAX_PER_COL) + " 个</text>";
+      }
+    });
+    svg += "</svg>";
+    return svg;
   }
 
   // ---------------- 渲染 ----------------
   function render(job, data, markdown) {
     var summary = job.summary || {};
+    document.body.classList.add("has-result");
     $("result").classList.remove("hidden");
 
     if (job.status === "skipped" || summary.skipped) {
@@ -525,7 +652,7 @@
         "<td>" + (evidence || '<span class="ev">无</span>') + "</td>" +
         "</tr>";
     }).join("");
-    $("pane-fields").innerHTML = '<table class="tbl"><thead><tr>' +
+    $("pane-fields").innerHTML = '<table class="tbl fields"><thead><tr>' +
       "<th>字段</th><th>值</th><th>状态</th><th>置信度</th><th>来源</th><th>原文证据</th>" +
       "</tr></thead><tbody>" + rows + "</tbody></table>";
   }
@@ -636,6 +763,63 @@
   }
   function hideError() { $("error-card").classList.add("hidden"); }
 
+  // ---------------- 示例任务 ----------------
+  // 参考图把「能做什么」直接摆在首屏，比空状态更有引导性；
+  // 这里每条只是引导，点击后回到输入区并唤起文件选择，不改变业务状态。
+  var SUGGESTIONS = {
+    common: [
+      "抽取结构化字段并附原文证据",
+      "查看缺失项与待人工确认的字段",
+      "生成可编辑的招标文件 .docx",
+      "核对投标响应与资格要求的差距",
+      "按项目归档多轮解析结果",
+      "导出 JSON、审核报告与平台草稿"
+    ],
+    build: [
+      "把标的清单填进招标文件表格",
+      "逐条标注 ★ ▲ 实质性条款",
+      "补齐商务要求与编制规范默认值",
+      "导出 PDF 与平台草稿"
+    ],
+    check: [
+      "比对招标要求与投标响应",
+      "标记不满足与部分满足的条目",
+      "检查模板占位符覆盖情况",
+      "复核低置信与推断字段"
+    ],
+    keep: [
+      "按采购项目归档任务",
+      "恢复已归档项目继续编辑",
+      "在企业档案里复用资质与业绩"
+    ]
+  };
+
+  function renderSuggestions(tab) {
+    var list = SUGGESTIONS[tab] || SUGGESTIONS.common;
+    $("sugg-grid").innerHTML = list.map(function (text) {
+      return '<a class="sugg-item" href="#" data-sugg="' + esc(text) + '">' +
+        '<svg viewBox="0 0 24 24"><path d="M4 4v7a4 4 0 0 0 4 4h11"/><path d="M15 11l4 4-4 4"/></svg>' +
+        "<span>" + esc(text) + "</span></a>";
+    }).join("");
+  }
+
+  $("sugg-tabs").addEventListener("click", function (e) {
+    var btn = e.target.closest(".sugg-tab");
+    if (!btn) return;
+    this.querySelectorAll(".sugg-tab").forEach(function (b) { b.classList.remove("on"); });
+    btn.classList.add("on");
+    renderSuggestions(btn.dataset.tab);
+  });
+
+  $("sugg-grid").addEventListener("click", function (e) {
+    if (!e.target.closest(".sugg-item")) return;
+    e.preventDefault();
+    $("drop").scrollIntoView({ behavior: "smooth", block: "center" });
+    setTimeout(function () { $("file").click(); }, 240);
+  });
+
+  renderSuggestions("common");
+
   // ---------------- 交互绑定 ----------------
   $("run").addEventListener("click", function () { startExtraction(false); });
   $("retry-force").addEventListener("click", function () { startExtraction(true); });
@@ -649,6 +833,58 @@
   });
 
   loadHealth();
+  loadProjects();
+
+  // 打开/恢复一个任务：进行中则继续轮询，已完成则加载结果
+  function openJob(jobId, resume) {
+    $("status").classList.add("show");
+    $("status-title").textContent = resume ? "检测到进行中的解析，正在恢复…" : "正在载入历史任务…";
+    $("status-sub").textContent = jobId;
+    $("run").disabled = true;
+    fetch("/api/jobs/" + encodeURIComponent(jobId))
+      .then(function (r) {
+        return r.json().then(function (data) {
+          if (!r.ok) throw new Error(data.error || ("请求失败 " + r.status));
+          return data;
+        });
+      })
+      .then(function (job) {
+        if (job.status === "queued" || job.status === "running") {
+          state.startedAt = Date.now();
+          state.jobId = job.id;
+          state.tick = setInterval(function () {
+            $("status-elapsed").textContent = ((Date.now() - state.startedAt) / 1000).toFixed(1) + "s";
+          }, 100);
+          poll(job.id);
+          return;
+        }
+        $("status").classList.remove("show");
+        $("run").disabled = false;
+        if (job.status === "error") { showError(job.error || "该任务执行失败"); return; }
+        loadResult(job);
+      })
+      .catch(function (err) {
+        $("status").classList.remove("show");
+        $("run").disabled = false;
+        showError("载入任务失败：" + (err.message || err));
+      });
+  }
+
+  // 页面加载：优先 ?job= 指定任务；否则若后端有进行中的解析，自动恢复轮询，
+  // 这样从填写工作台 / 项目工作台跳回来，解析进度依然可见、可继续。
+  (function () {
+    var jobId = new URLSearchParams(window.location.search).get("job");
+    if (jobId) { openJob(jobId, false); return; }
+    fetch("/api/jobs")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var active = (data.jobs || []).filter(function (j) {
+          return j.kind === "extract" && (j.status === "queued" || j.status === "running");
+        });
+        if (active.length) { openJob(active[0].id, true); }
+      })
+      .catch(function () { /* 无进行中任务或查询失败，保持正常首页 */ });
+  })();
 })();
 </script>
 </body>
