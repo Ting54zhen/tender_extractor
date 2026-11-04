@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目工作台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%232563eb'/%3E%3Cpath%20d='M10%207h8l5%205v13a1%201%200%200%201-1%201H10a1%201%200%200%201-1-1V8a1%201%200%200%201%201-1z'%20fill='%23fff'/%3E%3Cpath%20d='M18%207v5h5'%20fill='%23c2d8ff'/%3E%3Cpath%20d='M12.5%2016h7M12.5%2019.5h4.5'%20stroke='%232563eb'%20stroke-width='1.4'%20stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/app.css">
+<link rel="stylesheet" href="/assets/projects.css">
+</head>
+<body>
+<div class="shell">
+  <main class="main">
+    <div class="main-inner wide">
+      <div class="page-head">
+        <h1>项目工作台</h1>
+        <p>按采购项目归档任务；归档不删数据，随时恢复</p>
+      </div>
+
+      <div class="alert error hidden" id="error" style="margin-bottom:14px"></div>
+
+  <section class="card plain" id="list-view">
+    <div class="toolbar">
+      <div class="seg" id="status-seg">
+        <button data-status="active" class="active">进行中</button>
+        <button data-status="archived">已归档</button>
+        <button data-status="">全部</button>
+      </div>
+      <div class="spacer"></div>
+      <button class="btn primary" id="new-project">＋ 新建项目</button>
+    </div>
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <section class="card plain" id="detail-view" style="display:none">
+    <div class="toolbar">
+      <button class="btn small" id="back">← 返回列表</button>
+      <div class="spacer"></div>
+      <b id="detail-title" style="font-size:14px"></b>
+    </div>
+    <div id="detail-jobs"></div>
+  </section>
+
+      <footer>数据保存在本机 data/tender.db，不会上传到外部服务</footer>
+    </div>
+  </main>
+</div>
+
+<dialog id="dlg-new">
+  <div class="dlg-body">
+    <h3>新建项目</h3>
+    <label>项目名称（必填）</label>
+    <input id="np-name" placeholder="例如：2025年社区管理与服务资源库采购">
+    <label>备注（可选）</label>
+    <textarea id="np-note" placeholder="采购方式、预算、代理机构等背景信息"></textarea>
+    <div class="dlg-foot">
+      <button class="btn" id="np-cancel">取消</button>
+      <button class="btn primary" id="np-create">创建</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dlg-rename">
+  <div class="dlg-body">
+    <h3>重命名项目</h3>
+    <input id="rn-name">
+    <div class="dlg-foot">
+      <button class="btn" id="rn-cancel">取消</button>
+      <button class="btn primary" id="rn-save">保存</button>
+    </div>
+  </div>
+</dialog>
+
+<script src="/assets/shell.js"></script>
+<script src="/assets/projects.js"></script>
+</body>
+</html>

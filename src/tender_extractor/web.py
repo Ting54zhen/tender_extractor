@@ -24,11 +24,14 @@ import argparse
 import json
 import os
 import re
+import subprocess
+import sys
 import tempfile
 import threading
 import time
 import uuid
 import webbrowser
+from datetime import datetime
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,9 +40,12 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from .doc_generator import generate_tender_document
 from .llm_client import build_llm_client
+from .models import extraction_result_from_dict
+from .paths import app_data_dir, database_path
 from .pipeline import Extractor
 from .platform_adapter import PlatformRecognitionError, to_platform_draft
 from .report import render_markdown
+from .storage import Database
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent.parent
@@ -69,12 +75,138 @@ KEEP_JOBS = 30
 HEALTH_TTL = 15.0
 
 
+_COMPANY_BASIC_FIELDS = (
+    "name", "credit_code", "registered_capital", "founded", "address",
+    "legal_person", "contact_name", "contact_phone", "business_scope",
+)
+_QUALIFICATION_FIELDS = ("name", "certificate_no", "issuer", "valid_until", "evidence")
+_PERFORMANCE_FIELDS = ("project_name", "amount", "year", "client", "evidence")
+_PERSONNEL_FIELDS = ("name", "role", "title", "certificate", "years")
+
+
+def default_company_profile() -> dict[str, Any]:
+    """空企业档案，形状与 CompanyProfile.to_dict() 一致。"""
+    return {
+        "company": {key: "" for key in _COMPANY_BASIC_FIELDS},
+        "qualifications": [],
+        "performances": [],
+        "personnel": [],
+        "statements": {},
+        "evidence_index": {},
+    }
+
+
+def _str_map(value: Any, fields: tuple[str, ...]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("条目必须是 JSON 对象")
+    out: dict[str, Any] = {}
+    for key in fields:
+        raw = value.get(key, "")
+        if key == "years":
+            try:
+                out[key] = int(raw or 0)
+            except (TypeError, ValueError):
+                out[key] = 0
+        else:
+            out[key] = str(raw or "").strip()
+    return out
+
+
+def normalize_company_profile(data: Any) -> dict[str, Any]:
+    """把前端提交的档案归一化成 CompanyProfile 兼容的形状，非法输入直接报错。"""
+    if not isinstance(data, dict):
+        raise ValueError("企业档案必须是 JSON 对象")
+    company = data.get("company")
+    if not isinstance(company, dict):
+        raise ValueError("company 必须是 JSON 对象")
+    out = default_company_profile()
+    for key in _COMPANY_BASIC_FIELDS:
+        out["company"][key] = str(company.get(key, "") or "").strip()
+    for section, fields in (
+        ("qualifications", _QUALIFICATION_FIELDS),
+        ("performances", _PERFORMANCE_FIELDS),
+        ("personnel", _PERSONNEL_FIELDS),
+    ):
+        rows = data.get(section)
+        if not isinstance(rows, list):
+            raise ValueError(f"{section} 必须是数组")
+        cleaned = [_str_map(row, fields) for row in rows if isinstance(row, dict)]
+        # 跳过整行全空的条目
+        out[section] = [row for row in cleaned if any(str(v) for v in row.values())]
+    for section in ("statements", "evidence_index"):
+        mapping = data.get(section)
+        if not isinstance(mapping, dict):
+            raise ValueError(f"{section} 必须是 JSON 对象")
+        out[section] = {str(k): str(v or "") for k, v in mapping.items() if str(k).strip()}
+    return out
+
+
+# LibreOffice 的常见安装位置：Windows 装到 Program Files，macOS 在应用包内，
+# Linux 由发行版放到 /usr/bin 或 /usr/lib。macOS 不在 PATH 里，必须按应用包路径找。
+_SOFFICE_CANDIDATES = (
+    "C:/Program Files/LibreOffice/program/soffice.exe",
+    "C:/Program Files (x86)/LibreOffice/program/soffice.exe",
+    "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+    "/usr/lib/libreoffice/program/soffice",
+    "/usr/bin/libreoffice",
+)
+
+
+def _find_soffice() -> Path | None:
+    """找 LibreOffice 的 soffice：系统安装路径优先，其次 PATH。"""
+    import shutil
+
+    for candidate in _SOFFICE_CANDIDATES:
+        path = Path(candidate)
+        if path.is_file():
+            return path
+    found = shutil.which("soffice") or shutil.which("libreoffice")
+    return Path(found) if found else None
+
+
+def _docx_to_pdf(docx_path: Path, out_dir: Path) -> tuple[Path | None, str]:
+    """docx → PDF。优先 LibreOffice，回退 Word COM（pywin32）。
+
+    返回 (pdf 路径或 None, 使用的转换器说明)。
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    soffice = _find_soffice()
+    if soffice is not None:
+        try:
+            subprocess.run(
+                [str(soffice), "--headless", "--convert-to", "pdf",
+                 "--outdir", str(out_dir), str(docx_path)],
+                timeout=180, capture_output=True,
+            )
+            pdf = out_dir / (docx_path.stem + ".pdf")
+            if pdf.is_file():
+                return pdf, "libreoffice"
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        import win32com.client  # noqa: F401 - pywin32 未装则跳过
+
+        word = win32com.client.Dispatch("Word.Application")
+        word.Visible = False
+        doc = word.Documents.Open(str(docx_path.resolve()))
+        pdf = out_dir / (docx_path.stem + ".pdf")
+        doc.SaveAs(str(pdf.resolve()), FileFormat=17)
+        doc.Close(False)
+        word.Quit()
+        if pdf.is_file():
+            return pdf, "word"
+    except Exception:  # noqa: BLE001 - 无 pywin32 / 无 Word / 转换失败
+        pass
+    return None, ""
+
+
 @dataclass
 class Job:
     id: str
     filename: str
     use_llm: bool
     allow_non_tender: bool
+    project_id: str | None = None
     status: str = "queued"          # queued | running | done | skipped | error
     stage: str = "排队中"
     error: str = ""
@@ -87,6 +219,7 @@ class Job:
     json_path: Path | None = None
     md_path: Path | None = None
     draft_path: Path | None = None
+    source_path: Path | None = None  # 上传原文留存路径（投标书生成/重跑用）
     result_obj: Any = None          # ExtractionResult 对象，供生成器使用（不参与序列化）
 
     def public(self) -> dict[str, Any]:
@@ -94,6 +227,7 @@ class Job:
         return {
             "id": self.id,
             "kind": "extract",
+            "project_id": self.project_id,
             "filename": self.filename,
             "status": self.status,
             "stage": self.stage,
@@ -119,6 +253,7 @@ class CompareJob:
     tender_filename: str
     bid_filename: str
     use_llm: bool
+    project_id: str | None = None
     status: str = "queued"          # queued | running | done | error
     stage: str = "排队中"
     error: str = ""
@@ -132,6 +267,7 @@ class CompareJob:
         return {
             "id": self.id,
             "kind": "compare",
+            "project_id": self.project_id,
             "tender_filename": self.tender_filename,
             "bid_filename": self.bid_filename,
             "status": self.status,
@@ -245,13 +381,44 @@ def _summarize(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class Service:
-    """任务队列 + 结果缓存。抽取线程数等于并发上传数，由 ThreadingHTTPServer 拉起。"""
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """递归合并设置：override 有值则覆盖，嵌套 dict 深合并。"""
+    merged = dict(base)
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
-    def __init__(self, output_dir: Path | None = None) -> None:
+
+def _iso_to_ts(value: str | None) -> float | None:
+    """ISO 时间戳转 epoch 秒（用于从 DB 恢复任务后计算 elapsed）。"""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        return None
+
+
+class Service:
+    """任务队列 + 结果缓存 + SQLite 持久化。
+
+    内存 dict 是活跃任务的缓存，SQLite 是事实数据源：
+    - 提交任务时写库，运行结束回写结果；
+    - 重启后历史任务从库中恢复，仍可查看与生成招标文件。
+    """
+
+    def __init__(
+        self,
+        output_dir: Path | None = None,
+        db: Database | None = None,
+    ) -> None:
         self.jobs: dict[str, Job | CompareJob] = {}
         self.lock = threading.Lock()
         self.tmp_dir = Path(tempfile.mkdtemp(prefix="tender-web-"))
+        self.db = db or Database(database_path())
         self._output_dir = output_dir
         self._settings: dict[str, Any] | None = None
         self._health: dict[str, Any] | None = None
@@ -263,12 +430,47 @@ class Service:
     # ------------------------------------------------------------------
 
     def settings(self) -> dict[str, Any]:
+        """出厂 settings.json + 设置页用户覆盖层（存 SQLite）。"""
         if self._settings is None:
             try:
                 self._settings = Extractor().settings
             except Exception:
                 self._settings = {}
+            overrides = self.db.get_setting("settings_override")
+            if isinstance(overrides, dict):
+                self._settings = _deep_merge(self._settings, overrides)
         return self._settings
+
+    def settings_overrides(self) -> dict[str, Any]:
+        stored = self.db.get_setting("settings_override")
+        return stored if isinstance(stored, dict) else {}
+
+    def save_settings(self, overrides: dict[str, Any]) -> dict[str, Any]:
+        """保存设置页覆盖层，并失效缓存让后续请求立即生效。"""
+        if not isinstance(overrides, dict):
+            raise ValueError("设置内容必须是 JSON 对象")
+        self.db.set_setting("settings_override", overrides)
+        self._settings = None
+        return self.settings()
+
+    # ------------------------------------------------------------------
+    # 企业档案（投标书生成的企业侧素材库）
+    # ------------------------------------------------------------------
+
+    def company_profile(self) -> dict[str, Any]:
+        stored = self.db.get_company()
+        return stored if isinstance(stored, dict) else default_company_profile()
+
+    def save_company_profile(self, data: Any) -> dict[str, Any]:
+        profile = normalize_company_profile(data)
+        return self.db.save_company(profile)
+
+    def _new_extractor(self) -> Extractor:
+        """按当前生效配置构建 Extractor。"""
+        return Extractor(settings_override=self.settings_overrides())
+
+    def projects(self) -> Database:
+        return self.db
 
     def health(self) -> dict[str, Any]:
         now = time.time()
@@ -324,13 +526,33 @@ class Service:
         return self._groups
 
     def job_fields(self, job: Job) -> dict[str, Any] | None:
-        """按分组整理抽取结果，供「AI 建议 + 人工拍板」工作台使用。"""
+        """按分组整理抽取结果，供「AI 建议 + 人工拍板」工作台使用。
+
+        缺失字段会附带 history（历史确认值），这是「字段资产复利」的入口：
+        本项目或上一个项目填过的采购人、代理机构、合同份数等，直接提示复用。
+        """
         if isinstance(job, CompareJob) or job.result is None:
             return None
         raw_fields = job.result.get("fields") or {}
+        history = self.db.latest_field_values()
+
+        # 自主（自行）招标时代理机构整组字段不适用，不计入缺失、不需填写
+        org_form_value = ""
+        org_field = raw_fields.get("tender_org_form")
+        if isinstance(org_field, dict):
+            org_form_value = str(org_field.get("value") or "")
+        is_self_org = any(word in org_form_value for word in ("自行", "自主", "本单位", "自己"))
+        na_keys = (
+            {"agency", "agency_address", "agency_contact",
+             "agency_project_contact", "agency_project_phone", "agency_fee"}
+            if is_self_org else set()
+        )
+
         groups: list[dict[str, Any]] = []
         total = 0
         missing = 0
+        history_count = 0
+        na_count = 0
         for group in self.field_groups():
             items: list[dict[str, Any]] = []
             for key in group["fields"]:
@@ -352,16 +574,41 @@ class Service:
                     "errors": data.get("errors") or [],
                     "warnings": data.get("warnings") or [],
                     "notes": data.get("notes") or "",
+                    "history": None,
+                    "na": key in na_keys,
                 }
+                if key in na_keys:
+                    na_count += 1
+                # 只在字段为空且不适用排除时给历史建议：已有可靠值时不该被旧值干扰
+                if item["value"] in (None, "") and key not in na_keys:
+                    past = history.get(key)
+                    if past and past.get("value") not in (None, ""):
+                        item["history"] = {
+                            "value": past["value"],
+                            "job_id": past.get("job_id", ""),
+                            "project_id": past.get("project_id"),
+                            "updated_at": past.get("updated_at", ""),
+                            "source": past.get("source", ""),
+                        }
+                        history_count += 1
                 items.append(item)
                 total += 1
+                if key in na_keys:
+                    continue  # 不适用字段不算缺失
                 if item["value"] in (None, ""):
                     missing += 1
             if items:
                 groups.append(
                     {"key": group["key"], "label": group["label"], "items": items}
                 )
-        return {"groups": groups, "total": total, "missing": missing}
+        return {
+            "groups": groups,
+            "total": total,
+            "missing": missing,
+            "history_count": history_count,
+            "na_count": na_count,
+            "org_form": org_form_value,
+        }
 
     def generate_document(
         self,
@@ -370,10 +617,13 @@ class Service:
         missing_mode: str = "mark",
     ) -> Path:
         """用用户确认后的值渲染招标文件，返回输出路径。"""
+        if job.result_obj is None and job.result is not None:
+            # 从 SQLite 恢复的历史任务：由持久化的抽取结果重建生成器所需对象
+            job.result_obj = extraction_result_from_dict(job.result)
         if job.result_obj is None:
             raise ValueError("该任务没有可用的抽取结果，无法生成招标文件")
         stem = Path(job.filename).stem or "招标文件"
-        output_dir = self._output_dir or (Path("data") / "结果审核报告")
+        output_dir = self._resolve_output_dir()
         output_dir.mkdir(parents=True, exist_ok=True)
         target = _unique_path(output_dir / f"{stem}-招标文件.docx")
         generated = generate_tender_document(
@@ -383,6 +633,260 @@ class Service:
             overrides=values,
         )
         return generated.output_path
+
+    def generate_bid(self, job: Job) -> dict[str, Any]:
+        """基于已有抽取结果 + 企业档案生成投标书初稿。
+
+        关系抽取（资格要求/评分点）按任务原样走模型；原文留存缺失时降级为
+        仅项目信息骨架，并在 meta 里说明。
+        """
+        from .bid_writer import generate_bid_document
+
+        if isinstance(job, CompareJob):
+            raise ValueError("比对任务不能生成投标书")
+        if job.result is None:
+            raise ValueError("该任务还没有抽取结果")
+        source = job.source_path
+        if not source or not Path(source).is_file():
+            raise ValueError(
+                "上传原文已不存在，无法抽取资格要求与评分点；请重新上传该招标文件后再试"
+            )
+        profile_data = self.company_profile()
+        profile_file = self.tmp_dir / f"{job.id}-company.json"
+        profile_file.write_text(
+            json.dumps(profile_data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        result = generate_bid_document(
+            source,
+            profile_file,
+            use_llm=job.use_llm,
+            fields=job.result.get("fields") or {},
+        )
+        # 投标书 markdown 落盘，随任务可下载
+        stem = Path(job.filename).stem or "投标书"
+        out_dir = self._resolve_output_dir()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        md_path = _unique_path(out_dir / f"{stem}-投标书.md")
+        md_path.write_text(result.markdown, encoding="utf-8")
+        payload = result.to_dict()
+        payload["md_path"] = str(md_path)
+        return payload
+
+    def analyze_job_graph(self, job: Job) -> dict[str, Any]:
+        """知识图谱风险分析：字段 + 关系抽取 → 建图 → 三类清单 + Turtle。
+
+        关系抽取依赖模型与原文；模型不可用时图退化为字段节点，
+        meta 里带原因，不阻塞返回。
+        """
+        from .graph_builder import build_graph_from_result, to_turtle
+        from .graph_queries import analyze_graph, render_knowledge_report
+
+        if isinstance(job, CompareJob):
+            raise ValueError("比对任务暂不支持图谱分析")
+        if job.result is None:
+            raise ValueError("该任务还没有抽取结果")
+        relations_dict: dict[str, Any] = {}
+        meta: dict[str, Any] = {}
+        if job.use_llm:
+            if not job.source_path or not Path(job.source_path).is_file():
+                meta["error"] = "上传原文已不存在，图谱只含字段节点（无资格/评分/废标实体）"
+            else:
+                try:
+                    from .document import read_document
+                    from .llm_client import build_llm_client
+                    from .relation_extract import extract_relations
+
+                    extractor = self._new_extractor()
+                    doc = read_document(Path(job.source_path))
+                    client = build_llm_client(extractor.settings.get("llm", {}))
+                    relations_dict = extract_relations(client, doc, extractor.settings).to_dict()
+                    meta["relations"] = relations_dict.get("meta", {})
+                except Exception as exc:  # noqa: BLE001 - 关系抽取失败不阻塞字段图
+                    meta["error"] = f"{type(exc).__name__}: {exc}"
+        else:
+            meta["error"] = "该任务是仅规则抽取，无关系实体（开启完整链路重跑可获得）"
+
+        graph = build_graph_from_result(job.result, relations_dict)
+        analysis = analyze_graph(graph)
+        if graph.fallbacks:
+            meta["fallbacks"] = graph.fallbacks
+        return {
+            "project_name": graph.project_name,
+            "analysis": analysis,
+            "knowledge_report": render_knowledge_report(graph),
+            "turtle": to_turtle(graph),
+            "graph": graph.to_dict(),
+            "meta": meta,
+        }
+
+    def suggest_values(self, job: Job) -> dict[str, Any]:
+        """为「原文没有、但模板需要」的字段起草建议值。
+
+        铁律：建议值绝不写入抽取结果（抽取结果只放原文事实），也不参与
+        模板回填——只有用户在填写页显式采纳后才生效。每个建议带 reason，
+        标注 source=llm_suggest / status=suggested。
+        """
+        if isinstance(job, CompareJob):
+            raise ValueError("比对任务没有可建议的字段")
+        if job.result is None:
+            raise ValueError("该任务还没有抽取结果")
+
+        fields = job.result.get("fields") or {}
+        targets: dict[str, dict[str, Any]] = {}
+        for key, data in fields.items():
+            if not isinstance(data, dict):
+                continue
+            if not (data.get("template") or "").strip():
+                continue
+            if data.get("value") not in (None, ""):
+                continue
+            targets[key] = data
+        if not targets:
+            return {"suggestions": {}, "count": 0, "note": "没有需要起草的缺失字段"}
+        if not job.use_llm:
+            return {
+                "suggestions": {},
+                "count": 0,
+                "note": "该任务是仅规则抽取，没有模型上下文；用完整链路重新解析后可起草",
+            }
+
+        known: dict[str, Any] = {}
+        for key, data in fields.items():
+            if isinstance(data, dict) and data.get("value") not in (None, ""):
+                known[data.get("label") or key] = data.get("value")
+
+        extractor = self._new_extractor()
+        settings = extractor.settings.get("llm", {})
+        try:
+            from .llm_client import build_llm_client
+
+            client = build_llm_client(settings)
+        except Exception as exc:  # noqa: BLE001
+            return {"suggestions": {}, "count": 0, "note": f"模型不可用：{exc}"}
+
+        items = [
+            {"key": key, "label": (data.get("label") or key)}
+            for key, data in sorted(targets.items())
+        ][:20]
+        prompt = (
+            "你是政府采购招投标顾问。下面是某个采购项目已确认的信息，"
+            "以及招标文件模板中需要、但原文没有写的字段。请为每个字段起草一个"
+            "贴合该项目的合理建议值（拿不准的写通用合规表述），并给一句话理由。\n"
+            "这些是建议值，最终以人工确认为准。\n\n"
+            "已知项目信息：" + json.dumps(known, ensure_ascii=False, default=str)[:2000] + "\n"
+            "待起草字段：" + json.dumps(items, ensure_ascii=False)
+        )
+        schema = {
+            "type": "object",
+            "properties": {
+                "suggestions": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}, "reason": {"type": "string"}},
+                    },
+                }
+            },
+        }
+        try:
+            parsed = client.chat_json(
+                "你是严谨的招投标文档助手，只输出 JSON。", prompt, schema=schema
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"suggestions": {}, "count": 0, "note": f"起草失败：{exc}"}
+
+        suggestions: dict[str, Any] = {}
+        for key in targets:
+            item = (parsed.get("suggestions") or {}).get(key)
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value") or "").strip()
+            if not value:
+                continue
+            suggestions[key] = {
+                "value": value,
+                "reason": str(item.get("reason") or "").strip(),
+                "source": "llm_suggest",
+                "status": "suggested",
+                "label": targets[key].get("label") or key,
+            }
+        return {"suggestions": suggestions, "count": len(suggestions)}
+
+    def export_job_pdf(self, job: Job) -> Path:
+        """生成招标文件 docx 并转成 PDF，返回 PDF 路径。"""
+        if isinstance(job, CompareJob):
+            raise ValueError("比对任务没有可导出的招标文件")
+        docx = self.generate_document(job, {}, "mark")
+        pdf, method = _docx_to_pdf(docx, docx.parent)
+        if pdf is None:
+            raise ValueError(
+                "本机没有可用的 docx→PDF 转换器：安装 LibreOffice（推荐）或"
+                " pip install pywin32 + 本机 Word 后重试"
+            )
+        _log(f"[web] PDF 导出完成（{method}）：{pdf.name}")
+        return pdf
+
+    def export_project_zip(self, project_id: str) -> tuple[Path, int]:
+        """把项目内所有已完成任务的结果打包成 zip，返回 (zip 路径, 文件数)。"""
+        import io
+        import zipfile
+
+        project = self.db.get_project(project_id)
+        if project is None:
+            raise ValueError("项目不存在")
+        jobs = [row for row in self.db.list_jobs(project_id=project_id)
+                if row.get("kind") == "extract" and row.get("result")]
+        if not jobs:
+            raise ValueError("该项目还没有已完成的解析任务")
+
+        buffer = io.BytesIO()
+        count = 0
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for row in jobs:
+                stem = Path(row.get("filename") or row["id"]).stem or row["id"]
+                safe_stem = "".join(ch if ch not in '\\/:*?"<>|' else "_" for ch in stem)[:60]
+                for label, key, mime in (
+                    ("结果", "result", ".json"), ("审核报告", "report", ".md")
+                ):
+                    content = row.get(key)
+                    if content:
+                        text = content if isinstance(content, str) else json.dumps(
+                            content, ensure_ascii=False, indent=2
+                        )
+                        zf.writestr(f"{safe_stem}-{label}{mime}", text)
+                        count += 1
+                draft = row.get("draft")
+                if draft:
+                    zf.writestr(f"{safe_stem}-平台草稿.json",
+                                json.dumps(draft, ensure_ascii=False, indent=2))
+                    count += 1
+                # 生成招标文件 docx（缺失字段标「待补充」）
+                job = self.get(row["id"])
+                if isinstance(job, Job) and job.result_obj is None and job.result is not None:
+                    job.result_obj = extraction_result_from_dict(job.result)
+                if isinstance(job, Job) and job.result_obj is not None:
+                    try:
+                        docx = self.generate_document(job, {}, "mark")
+                        zf.write(docx, f"{safe_stem}-招标文件.docx")
+                        count += 1
+                    except Exception:  # noqa: BLE001 - 单个任务生成失败不阻塞打包
+                        pass
+        out_dir = self._resolve_output_dir()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        name = "".join(ch if ch not in '\\/:*?"<>|' else "_" for ch in project["name"])[:50]
+        zip_path = _unique_path(out_dir / f"{name}-导出.zip")
+        zip_path.write_bytes(buffer.getvalue())
+        return zip_path, count
+
+    def save_confirmed_fields(
+        self,
+        job: Job,
+        values: list[dict[str, Any]],
+    ) -> int:
+        """保存用户确认后的字段值（字段资产，供后续项目复用）。"""
+        if isinstance(job, CompareJob):
+            raise ValueError("比对任务没有字段可确认")
+        return self.db.save_field_values(job.id, job.project_id, values)
 
     # ------------------------------------------------------------------
     # 任务
@@ -394,6 +898,7 @@ class Service:
         payload: bytes,
         use_llm: bool,
         allow_non_tender: bool,
+        project_id: str | None = None,
     ) -> Job:
         suffix = Path(filename).suffix.lower()
         if suffix not in ALLOWED_SUFFIXES:
@@ -403,6 +908,8 @@ class Service:
             )
         if not payload:
             raise ValueError("文件内容为空")
+        if project_id and self.db.get_project(project_id) is None:
+            raise ValueError("所属项目不存在")
 
         safe_name = Path(filename).name or f"upload{suffix}"
         job = Job(
@@ -410,9 +917,20 @@ class Service:
             filename=safe_name,
             use_llm=use_llm,
             allow_non_tender=allow_non_tender,
+            project_id=project_id,
         )
         target = self.tmp_dir / f"{job.id}{suffix}"
         target.write_bytes(payload)
+        # 原文留存（临时目录会被清理）：投标书生成、失败重跑都依赖它
+        keep_dir = self._resolve_output_dir() / "uploads"
+        keep_dir.mkdir(parents=True, exist_ok=True)
+        source_path = _unique_path(keep_dir / f"{job.id}_{safe_name}")
+        source_path.write_bytes(payload)
+        job.source_path = source_path
+        self.db.create_job(
+            job.id, "extract", safe_name, project_id, use_llm, allow_non_tender,
+            source_path=str(source_path),
+        )
 
         with self.lock:
             self.jobs[job.id] = job
@@ -428,6 +946,7 @@ class Service:
         bid_filename: str,
         bid_payload: bytes,
         use_llm: bool,
+        project_id: str | None = None,
     ) -> CompareJob:
         tender_suffix = Path(tender_filename).suffix.lower()
         bid_suffix = Path(bid_filename).suffix.lower()
@@ -441,17 +960,32 @@ class Service:
             raise ValueError("招标文件内容为空")
         if not bid_payload:
             raise ValueError("投标文件内容为空")
+        if project_id and self.db.get_project(project_id) is None:
+            raise ValueError("所属项目不存在")
 
+        safe_tender = Path(tender_filename).name or f"tender{tender_suffix}"
+        safe_bid = Path(bid_filename).name or f"bid{bid_suffix}"
         job = CompareJob(
             id=uuid.uuid4().hex,
-            tender_filename=Path(tender_filename).name or f"tender{tender_suffix}",
-            bid_filename=Path(bid_filename).name or f"bid{bid_suffix}",
+            tender_filename=safe_tender,
+            bid_filename=safe_bid,
             use_llm=use_llm,
+            project_id=project_id,
         )
         tender_target = self.tmp_dir / f"{job.id}-tender{tender_suffix}"
         bid_target = self.tmp_dir / f"{job.id}-bid{bid_suffix}"
         tender_target.write_bytes(tender_payload)
         bid_target.write_bytes(bid_payload)
+        self.db.create_job(
+            job.id,
+            "compare",
+            f"{safe_tender} vs {safe_bid}",
+            project_id,
+            use_llm,
+            False,
+            tender_filename=safe_tender,
+            bid_filename=safe_bid,
+        )
 
         with self.lock:
             self.jobs[job.id] = job
@@ -466,7 +1000,62 @@ class Service:
 
     def get(self, job_id: str) -> Job | CompareJob | None:
         with self.lock:
-            return self.jobs.get(job_id)
+            job = self.jobs.get(job_id)
+        if job is not None:
+            return job
+        # 内存缓存未命中（重启后首次访问）→ 从 SQLite 恢复
+        row = self.db.get_job(job_id)
+        if row is None:
+            return None
+        restored = self._job_from_row(row)
+        if restored is None:
+            return None
+        with self.lock:
+            self.jobs[job_id] = restored
+            self._evict_locked()
+        return restored
+
+    def _job_from_row(self, row: dict[str, Any]) -> Job | CompareJob | None:
+        """把 DB 行还原为内存任务对象。"""
+        created = _iso_to_ts(row.get("created_at")) or time.time()
+        finished = _iso_to_ts(row.get("finished_at"))
+        if row.get("kind") == "compare":
+            return CompareJob(
+                id=row["id"],
+                tender_filename=row.get("tender_filename") or "",
+                bid_filename=row.get("bid_filename") or "",
+                use_llm=bool(row.get("use_llm")),
+                project_id=row.get("project_id"),
+                status=row.get("status", "done"),
+                stage=row.get("stage", ""),
+                error=row.get("error", ""),
+                created_at=created,
+                finished_at=finished,
+                payload=row.get("result"),
+                summary=row.get("summary") or {},
+            )
+        if row.get("kind") == "extract":
+            return Job(
+                id=row["id"],
+                filename=row.get("filename") or "",
+                use_llm=bool(row.get("use_llm")),
+                allow_non_tender=bool(row.get("allow_non_tender")),
+                project_id=row.get("project_id"),
+                status=row.get("status", "done"),
+                stage=row.get("stage", ""),
+                error=row.get("error", ""),
+                created_at=created,
+                finished_at=finished,
+                result=row.get("result"),
+                report=row.get("report") or "",
+                draft=row.get("draft"),
+                summary=row.get("summary") or {},
+                json_path=Path(row["json_path"]) if row.get("json_path") else None,
+                md_path=Path(row["md_path"]) if row.get("md_path") else None,
+                draft_path=Path(row["draft_path"]) if row.get("draft_path") else None,
+                source_path=Path(row["source_path"]) if row.get("source_path") else None,
+            )
+        return None
 
     def _evict_locked(self) -> None:
         if len(self.jobs) <= KEEP_JOBS:
@@ -481,8 +1070,9 @@ class Service:
     def _run(self, job: Job, path: Path) -> None:
         job.status = "running"
         job.stage = "解析文档并抽取字段"
+        self.db.update_job(job.id, status="running", stage=job.stage)
         try:
-            extractor = Extractor()
+            extractor = self._new_extractor()
             result = extractor.extract(
                 path,
                 use_llm=job.use_llm,
@@ -516,6 +1106,20 @@ class Service:
             job.error = f"{type(exc).__name__}: {exc}"
         finally:
             job.finished_at = time.time()
+            self.db.update_job(
+                job.id,
+                status=job.status,
+                stage=job.stage,
+                error=job.error,
+                summary=job.summary,
+                result=job.result,
+                report=job.report,
+                draft=job.draft,
+                json_path=str(job.json_path) if job.json_path else "",
+                md_path=str(job.md_path) if job.md_path else "",
+                draft_path=str(job.draft_path) if job.draft_path else "",
+                finished_at=datetime.now().isoformat(timespec="seconds"),
+            )
             try:
                 path.unlink(missing_ok=True)
             except OSError:
@@ -524,13 +1128,14 @@ class Service:
     def _run_compare(self, job: CompareJob, tender_path: Path, bid_path: Path) -> None:
         """三阶段：抽招标要求 → 抽投标响应 → 逐条比对。"""
         job.status = "running"
+        self.db.update_job(job.id, status="running", stage=job.stage)
         try:
             from .bid_extract import BidResult, extract_bid_responses
             from .compliance_matcher import match_qualifications, render_compliance_report
             from .document import read_document
             from .relation_extract import RelationResult, extract_relations
 
-            extractor = Extractor()
+            extractor = self._new_extractor()
             settings = extractor.settings
             client = build_llm_client(settings.get("llm", {})) if job.use_llm else None
 
@@ -577,6 +1182,15 @@ class Service:
             job.error = f"{type(exc).__name__}: {exc}"
         finally:
             job.finished_at = time.time()
+            self.db.update_job(
+                job.id,
+                status=job.status,
+                stage=job.stage,
+                error=job.error,
+                summary=job.summary,
+                result=job.payload,
+                finished_at=datetime.now().isoformat(timespec="seconds"),
+            )
             for path in (tender_path, bid_path):
                 try:
                     path.unlink(missing_ok=True)
@@ -589,7 +1203,7 @@ class Service:
         configured = (self.settings().get("output") or {}).get("dir")
         if configured:
             return Path(configured)
-        return Path.cwd() / "data" / "结果审核报告"
+        return app_data_dir() / "结果审核报告"
 
     def _save(
         self,
@@ -632,13 +1246,41 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path in {"/", "/index.html"}:
-            return self._serve_index()
+            return self._serve_static("index.html")
         if path in {"/compare", "/compare.html"}:
             return self._serve_static("compare.html")
         if path in {"/fill", "/fill.html"}:
             return self._serve_static("fill.html")
+        if path in {"/projects", "/projects.html"}:
+            return self._serve_static("projects.html")
+        if path in {"/settings", "/settings.html"}:
+            return self._serve_static("settings.html")
+        if path in {"/company", "/company.html"}:
+            return self._serve_static("company.html")
+        if path.startswith("/assets/"):
+            return self._serve_static(path[len("/assets/"):])
         if path == "/api/health":
             return self._send_json(self.service.health())
+        if path == "/api/company":
+            return self._send_json({"profile": self.service.company_profile()})
+        if path == "/api/settings":
+            return self._send_json(
+                {
+                    "settings": self.service.settings(),
+                    "overrides": self.service.settings_overrides(),
+                }
+            )
+        if path == "/api/projects":
+            status = (parse_qs(parsed.query).get("status") or [None])[0]
+            return self._send_json({"projects": self.service.db.list_projects(status)})
+        if path == "/api/jobs":
+            query = parse_qs(parsed.query)
+            project_id = (query.get("project_id") or [None])[0] or None
+            return self._send_json(
+                {"jobs": self.service.db.list_jobs(project_id=project_id)}
+            )
+        if path.startswith("/api/projects/"):
+            return self._handle_project_get(parsed.path)
         if path.startswith("/api/jobs/"):
             return self._handle_job_get(path)
         self._send_json({"error": "未找到该路径"}, 404)
@@ -647,8 +1289,28 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/compare":
             return self._handle_compare()
+        if parsed.path == "/api/projects":
+            return self._handle_project_create()
+        if re.fullmatch(r"/api/projects/[^/]+/export", parsed.path):
+            return self._handle_project_export(parsed.path)
+        if parsed.path.startswith("/api/projects/"):
+            return self._handle_project_action(parsed.path)
+        if parsed.path == "/api/settings":
+            return self._handle_settings_save()
+        if parsed.path == "/api/company":
+            return self._handle_company_save()
         if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/generate"):
             return self._handle_generate(parsed.path)
+        if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/confirm"):
+            return self._handle_confirm(parsed.path)
+        if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/bid"):
+            return self._handle_bid(parsed.path)
+        if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/analyze"):
+            return self._handle_analyze(parsed.path)
+        if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/suggest"):
+            return self._handle_suggest(parsed.path)
+        if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/export/pdf"):
+            return self._handle_export_pdf(parsed.path)
         if parsed.path != "/api/extract":
             return self._send_json({"error": "未找到该路径"}, 404)
 
@@ -656,6 +1318,7 @@ class Handler(BaseHTTPRequestHandler):
         filename = (query.get("filename") or ["upload.docx"])[0].strip()
         use_llm = (query.get("use_llm") or ["1"])[0] not in {"0", "false", "no"}
         allow = (query.get("allow_non_tender") or ["0"])[0] in {"1", "true", "yes"}
+        project_id = (query.get("project_id") or [None])[0] or None
 
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -670,10 +1333,154 @@ class Handler(BaseHTTPRequestHandler):
 
         payload = self.rfile.read(length)
         try:
-            job = self.service.submit(filename, payload, use_llm, allow)
+            job = self.service.submit(filename, payload, use_llm, allow, project_id)
         except ValueError as exc:
             return self._send_json({"error": str(exc)}, 400)
         return self._send_json(job.public(), 202)
+
+    # ------------------------------------------------------------------
+    # 项目工作台
+    # ------------------------------------------------------------------
+
+    def _read_json_body(self) -> dict[str, Any] | None:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return {}
+        try:
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        return body if isinstance(body, dict) else None
+
+    def _drain_body(self) -> None:
+        """读掉未消费的请求体。
+
+        带请求体的 POST 若未读 body 就返回/关连接，Windows 回环下会把
+        未读数据触发成 RST，影响同 server 的后续连接（实测 409 分支引发
+        下一个请求 ConnectionReset）。
+        """
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length > 0:
+            try:
+                self.rfile.read(length)
+            except OSError:
+                pass
+
+    def _handle_project_create(self) -> None:
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json({"error": "请求体不是合法 JSON 对象"}, 400)
+        try:
+            project = self.service.db.create_project(
+                str(body.get("name") or ""), str(body.get("note") or "")
+            )
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 400)
+        return self._send_json(project, 201)
+
+    def _handle_project_get(self, path: str) -> None:
+        parts = [item for item in path.split("/") if item]
+        if len(parts) != 3:  # ["api", "projects", id]
+            return self._send_json({"error": "无效的项目路径"}, 400)
+        project = self.service.db.get_project(parts[2])
+        if project is None:
+            return self._send_json({"error": "项目不存在"}, 404)
+        project["jobs"] = self.service.db.list_jobs(project_id=parts[2])
+        return self._send_json(project)
+
+    def _handle_project_action(self, path: str) -> None:
+        parts = [item for item in path.split("/") if item]
+        if len(parts) != 4:  # ["api", "projects", id, action]
+            return self._send_json({"error": "无效的项目路径"}, 400)
+        project_id, action = parts[2], parts[3]
+        db = self.service.db
+
+        if action == "delete":
+            if not db.delete_project(project_id):
+                return self._send_json({"error": "项目不存在"}, 404)
+            return self._send_json({"ok": True})
+        if action not in {"archive", "restore", "rename"}:
+            return self._send_json({"error": "未找到该路径"}, 404)
+
+        body: dict[str, Any] = {}
+        if action == "rename":
+            body = self._read_json_body() or {}
+            if not body:
+                return self._send_json({"error": "缺少新名称"}, 400)
+        if action == "archive":
+            project = db.update_project(project_id, status="archived")
+        elif action == "restore":
+            project = db.update_project(project_id, status="active")
+        else:  # rename
+            project = db.update_project(project_id, name=str(body.get("name") or ""))
+        if project is None:
+            return self._send_json({"error": "项目不存在"}, 404)
+        return self._send_json(project)
+
+    # ------------------------------------------------------------------
+    # 设置页
+    # ------------------------------------------------------------------
+
+    def _handle_company_save(self) -> None:
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json({"error": "请求体不是合法 JSON 对象"}, 400)
+        try:
+            saved = self.service.save_company_profile(body)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 400)
+        return self._send_json({"profile": saved})
+
+    def _handle_settings_save(self) -> None:
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json({"error": "请求体不是合法 JSON 对象"}, 400)
+        if body.get("reset"):
+            try:
+                merged = self.service.save_settings({})
+            except ValueError as exc:
+                return self._send_json({"error": str(exc)}, 400)
+            return self._send_json({"settings": merged, "overrides": {}})
+        allowed_sections = {"llm", "review", "extraction", "output"}
+        overrides = self.service.settings_overrides()
+        for section, value in (body.get("settings") or {}).items():
+            if section not in allowed_sections:
+                return self._send_json({"error": f"不支持的设置段：{section}"}, 400)
+            overrides[section] = value
+        try:
+            merged = self.service.save_settings(overrides)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 400)
+        return self._send_json({"settings": merged, "overrides": overrides})
+
+    # ------------------------------------------------------------------
+    # 字段确认值
+    # ------------------------------------------------------------------
+
+    def _handle_confirm(self, path: str) -> None:
+        parts = [item for item in path.split("/") if item]
+        if len(parts) < 4:
+            return self._send_json({"error": "无效的任务路径"}, 400)
+        job = self.service.get(parts[2])
+        if job is None:
+            return self._send_json({"error": "任务不存在或已过期"}, 404)
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json({"error": "请求体不是合法 JSON 对象"}, 400)
+        values = body.get("values")
+        if not isinstance(values, list):
+            return self._send_json({"error": "values 必须是数组"}, 400)
+        try:
+            saved = self.service.save_confirmed_fields(job, values)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 400)
+        return self._send_json({"ok": True, "saved": saved})
 
     # ------------------------------------------------------------------
     # 双文档比对
@@ -731,13 +1538,27 @@ class Handler(BaseHTTPRequestHandler):
     def _serve_index(self) -> None:
         self._serve_static("index.html")
 
+    MIME_TYPES = {
+        ".html": "text/html; charset=utf-8",
+        ".css": "text/css; charset=utf-8",
+        ".js": "text/javascript; charset=utf-8",
+        ".json": "application/json; charset=utf-8",
+        ".svg": "image/svg+xml",
+        ".png": "image/png",
+        ".ico": "image/x-icon",
+    }
+
     def _serve_static(self, name: str) -> None:
-        target = STATIC_DIR / name
+        target = (STATIC_DIR / name).resolve()
+        # 只允许静态目录内的文件，防目录穿越
+        if not str(target).startswith(str(STATIC_DIR.resolve())):
+            return self._send_json({"error": "非法路径"}, 403)
         if not target.is_file():
             return self._send_json({"error": f"缺少前端文件：{target}"}, 500)
         body = target.read_bytes()
+        mime = self.MIME_TYPES.get(target.suffix.lower(), "text/html; charset=utf-8")
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -778,6 +1599,101 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"error": "该任务不支持下载"}, 404)
             return self._download(job, parts[4])
         self._send_json({"error": "未找到该路径"}, 404)
+
+    def _send_binary(self, path: Path, mime: str) -> None:
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header(
+            "Content-Disposition",
+            "attachment; filename*=UTF-8''" + quote(path.name),
+        )
+        self.end_headers()
+        # Windows 回环下一次性写大响应偶发 RST，分块写稳妥
+        chunk = 64 * 1024
+        for start in range(0, len(data), chunk):
+            self.wfile.write(data[start:start + chunk])
+        self.wfile.flush()
+
+    def _handle_export_pdf(self, path: str) -> None:
+        """招标文件 → PDF（LibreOffice / Word COM）。"""
+        parts = [item for item in path.split("/") if item]
+        if len(parts) < 4:
+            return self._send_json({"error": "无效的任务路径"}, 400)
+        job = self.service.get(parts[2])
+        if job is None:
+            return self._send_json({"error": "任务不存在或已过期"}, 404)
+        try:
+            pdf = self.service.export_job_pdf(job)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 409)
+        except Exception as exc:  # noqa: BLE001
+            return self._send_json({"error": f"PDF 导出失败：{exc}"}, 500)
+        return self._send_binary(pdf, "application/pdf")
+
+    def _handle_project_export(self, path: str) -> None:
+        """项目内所有已完成任务打包 zip 下载。"""
+        self._drain_body()
+        parts = [item for item in path.split("/") if item]
+        if len(parts) != 4:
+            return self._send_json({"error": "无效的项目路径"}, 400)
+        try:
+            zip_path, count = self.service.export_project_zip(parts[2])
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 409)
+        except Exception as exc:  # noqa: BLE001
+            return self._send_json({"error": f"打包失败：{exc}"}, 500)
+        _log(f"[web] 项目导出：{zip_path.name}（{count} 个文件）")
+        return self._send_binary(zip_path, "application/zip")
+
+    def _handle_suggest(self, path: str) -> None:
+        """为缺失字段起草 AI 建议值（suggested，需人工采纳）。"""
+        parts = [item for item in path.split("/") if item]
+        if len(parts) < 4:
+            return self._send_json({"error": "无效的任务路径"}, 400)
+        job = self.service.get(parts[2])
+        if job is None:
+            return self._send_json({"error": "任务不存在或已过期"}, 404)
+        try:
+            data = self.service.suggest_values(job)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 409)
+        except Exception as exc:  # noqa: BLE001
+            return self._send_json({"error": f"建议起草失败：{exc}"}, 500)
+        return self._send_json(data)
+
+    def _handle_analyze(self, path: str) -> None:
+        """知识图谱风险分析：废标预警 / 符合性自查 / 评分点材料映射。"""
+        parts = [item for item in path.split("/") if item]
+        if len(parts) < 4:
+            return self._send_json({"error": "无效的任务路径"}, 400)
+        job = self.service.get(parts[2])
+        if job is None:
+            return self._send_json({"error": "任务不存在或已过期"}, 404)
+        try:
+            data = self.service.analyze_job_graph(job)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 409)
+        except Exception as exc:  # noqa: BLE001
+            return self._send_json({"error": f"图谱分析失败：{exc}"}, 500)
+        return self._send_json(data)
+
+    def _handle_bid(self, path: str) -> None:
+        """基于该任务的抽取结果与企业档案，生成投标书初稿。"""
+        parts = [item for item in path.split("/") if item]
+        if len(parts) < 4:
+            return self._send_json({"error": "无效的任务路径"}, 400)
+        job = self.service.get(parts[2])
+        if job is None:
+            return self._send_json({"error": "任务不存在或已过期"}, 404)
+        try:
+            data = self.service.generate_bid(job)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 409)
+        except Exception as exc:  # noqa: BLE001 - 模型/文档异常统一兜底
+            return self._send_json({"error": f"投标书生成失败：{exc}"}, 500)
+        return self._send_json(data)
 
     def _handle_generate(self, path: str) -> None:
         """接收用户确认的字段值，生成招标文件并直接下载。"""
@@ -874,28 +1790,45 @@ def make_server(host: str, port: int, service: Service | None = None) -> Threadi
     return httpd
 
 
+def _log(message: str) -> None:
+    """同时输出到控制台与 data/web.log（打包后双击运行便于事后排障）。"""
+    print(message, flush=True)
+    try:
+        log_path = app_data_dir() / "web.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+    except OSError:
+        pass
+
+
 def serve(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     open_browser: bool = True,
 ) -> None:
+    _log(f"[web] 启动中（frozen={getattr(sys, 'frozen', False)}）…")
     try:
         httpd = make_server(host, port)
     except OSError as exc:
+        _log(f"[web] 端口 {port} 无法监听：{exc}")
         raise SystemExit(
             f"端口 {port} 无法监听：{exc}\n换个端口试试：--port {port + 1}"
         ) from exc
 
     url = f"http://{host}:{port}/"
-    print(f"[web] 已启动：{url}")
-    print(f"[web] 双文档比对：{url}compare")
-    print("[web] 文档只在本机处理；按 Ctrl+C 停止")
+    _log(f"[web] 已启动：{url}")
+    _log(f"[web] 项目工作台：{url}projects")
+    _log(f"[web] 双文档比对：{url}compare")
+    _log(f"[web] 可视化设置：{url}settings")
+    _log(f"[web] 数据目录：{app_data_dir()}（任务与字段确认值持久化于此）")
+    _log("[web] 文档只在本机处理；按 Ctrl+C 停止")
     if open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\n[web] 已停止")
+        _log("[web] 已停止")
     finally:
         httpd.server_close()
 
