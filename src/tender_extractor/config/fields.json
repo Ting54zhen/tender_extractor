@@ -3,24 +3,36 @@
   "description": "需求报告 -> 标准招标模板关键字段。template 字段与《标准模版.docx》中的 {占位符} 一一对应；template 为 null 的字段供平台内部使用。",
   "groups": {
     "basic": {
-      "label": "项目基本信息",
+      "label": "项目概况",
       "fields": [
         "project_name", "project_number", "procurement_plan_number",
-        "procurement_method", "tender_org_form", "budget_amount", "purchaser",
-        "supervision_unit", "purchaser_address", "purchaser_contact",
-        "purchaser_contact_person", "agency",
-        "agency_address", "agency_contact", "agency_project_contact",
-        "agency_project_phone", "procurement_item", "procurement_target",
+        "procurement_method", "tender_org_form", "budget_amount",
+        "project_summary", "procurement_item", "procurement_target",
+        "procurement_target_list", "star_clauses_summary",
         "industry", "contract_period", "consortium_allowed",
-        "subcontracting_allowed", "price_method", "project_summary"
+        "subcontracting_allowed", "price_method",
+        "qualification_requirements"
       ]
     },
-    "commercial": {
-      "label": "商务与政策",
+    "party": {
+      "label": "采购人与代理机构",
+      "fields": [
+        "purchaser", "purchaser_address", "purchaser_contact_person",
+        "purchaser_contact", "agency", "agency_address", "agency_contact",
+        "agency_project_contact", "agency_project_phone", "supervision_unit"
+      ]
+    },
+    "award": {
+      "label": "定标与代理服务费",
       "fields": [
         "candidate_count", "winner_count", "valid_supplier_count",
-        "agency_fee", "sme_policy", "inquiry_contact",
-        "inquiry_phone", "inquiry_address"
+        "agency_fee", "sme_policy"
+      ]
+    },
+    "inquiry": {
+      "label": "质疑与投诉",
+      "fields": [
+        "inquiry_contact", "inquiry_phone", "inquiry_address"
       ]
     },
     "scoring": {
@@ -215,7 +227,18 @@
       "required": true,
       "aliases": ["采购标的", "采购内容", "服务名称", "标的名称"],
       "sections": ["项目概况", "采购标的"],
-      "examples": ["2025年社区管理与服务专业教学资源库委托服务"]
+      "examples": ["2025年社区管理与服务专业教学资源库委托服务"],
+      "description": "采购标的名称，支持多项：多个标的时每行一个（模板回填时多行以「；」衔接）。"
+    },
+    {
+      "key": "procurement_target_list",
+      "label": "采购标的清单",
+      "template": "",
+      "type": "text",
+      "required": false,
+      "aliases": ["采购标的清单", "标的明细", "服务项目清单", "采购明细"],
+      "sections": ["采购标的", "采购内容"],
+      "description": "采购标的表的逐项清单：每行一个标的，含名称、数量、单价、金额与要求摘要。需求报告只有单一标的时与采购标的一致。"
     },
     {
       "key": "industry",
@@ -306,6 +329,26 @@
       "aliases": ["中小企业", "中小微企业", "专门面向中小企业", "预留份额"],
       "sections": ["资格要求", "供应商资格"],
       "description": "中小企业预留份额或专门面向中小企业的政策说明，保留原文关键条款。"
+    },
+    {
+      "key": "qualification_requirements",
+      "label": "供应商资格要求",
+      "template": "",
+      "type": "text",
+      "required": false,
+      "aliases": ["资格要求", "供应商资格", "资格条件", "投标人资格"],
+      "sections": ["供应商资格和人员要求", "资格要求", "供应商资格"],
+      "description": "供应商资格章节的逐条要求清单，多行保留原文条款。"
+    },
+    {
+      "key": "star_clauses_summary",
+      "label": "实质性条款清单",
+      "template": "",
+      "type": "text",
+      "required": false,
+      "aliases": ["实质性条款", "星标条款", "★", "废标条款"],
+      "sections": ["采购标的", "采购内容"],
+      "description": "采购需求中 ★▲ 标记的实质性条款（不满足即废标/扣分关键项），逐条列出。"
     },
     {
       "key": "inquiry_contact",

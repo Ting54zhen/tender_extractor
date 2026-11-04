@@ -33,6 +33,13 @@ def _make_result(**templates: str) -> ExtractionResult:
     )
 
 
+def _make_result_with_structured(structured: dict) -> ExtractionResult:
+    """构造带结构化数据（采购标的/商务要求/★▲条款）的抽取结果。"""
+    result = _make_result(项目名称="某单位信息化运维服务项目")
+    result.structured = structured
+    return result
+
+
 def _document_text(path) -> str:
     document = docx.Document(str(path))
     parts = [para.text for para in document.paragraphs]
@@ -123,3 +130,56 @@ def test_generate_raises_when_template_missing(tmp_path):
             template_path=tmp_path / "不存在.docx",
             output_path=tmp_path / "y.docx",
         )
+
+
+@requires_template
+def test_generate_fills_structured_tables(tmp_path):
+    """第二章采购需求的商务要求表、标的清单与多附表由 structured 回填。"""
+    result = _make_result_with_structured(
+        {
+            "business_requirements": {
+                "标的提供的时间": "自合同签订之日起12个月",
+                "标的提供的地点": "某单位院内",
+                "付款方式": "一次性支付",
+            },
+            "procurement_items": [
+                {"seq": "1", "name": "平台运维", "unit": "年", "quantity": 1.0,
+                 "unit_price": "50000", "amount": "50000", "requirement": "7×24小时值守"},
+                {"seq": "2", "name": "数据治理", "unit": "年", "quantity": 1.0,
+                 "unit_price": "50000", "amount": "50000", "requirement": "提供数据质量周报"},
+                {"seq": "3", "name": "安全服务", "unit": "年", "quantity": 1.0,
+                 "unit_price": "50000", "amount": "50000", "requirement": "★漏洞扫描"},
+            ],
+            "star_clauses": [
+                {"type": "★", "item_seq": "3", "item_name": "安全服务", "text": "须提供漏洞扫描报告"},
+            ],
+        }
+    )
+    generated = generate_tender_document(result, output_path=tmp_path / "结构化.docx")
+
+    text = _document_text(generated.output_path)
+    # 商务要求表
+    assert "自合同签订之日起12个月" in text
+    # 标的清单
+    assert "平台运维" in text and "数据治理" in text and "安全服务" in text
+    # 多附表标题
+    assert "附表二：数据治理" in text and "附表三：安全服务" in text
+    # ★ 条款进技术参数附表
+    assert "须提供漏洞扫描报告" in text
+
+
+@requires_template
+def test_generate_applies_default_values(tmp_path):
+    """编制规范必然字段（有效供应商家数等）用默认值填充，不再「待补充」。"""
+    from tender_extractor.doc_generator import DEFAULT_TEMPLATE_VALUES
+
+    result = _make_result(项目名称="某项目")
+    generated = generate_tender_document(result, output_path=tmp_path / "默认值.docx")
+
+    for name in DEFAULT_TEMPLATE_VALUES:
+        assert name not in generated.missing
+
+    text = _document_text(generated.output_path)
+    assert "本采购包不接受联合体投标" in text
+    assert "采购包1：总价" in text
+    assert "采购包1：3家" in text
