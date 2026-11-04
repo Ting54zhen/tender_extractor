@@ -324,16 +324,22 @@ def generate_bid_document(
     use_llm: bool = True,
     settings_override: dict[str, Any] | None = None,
     max_sections: int = 4,
+    fields: dict[str, Any] | None = None,
 ) -> BidGenerationResult:
     """生成投标书初稿。
 
     - 资格响应：逐条映射证明材料，标出缺口；
     - 技术方案：按评分点调用模型撰写（``use_llm=False`` 时给占位骨架）；
     - 废标自查：把废标条款转成提交前检查清单。
+
+    ``fields``：已抽取的字段结果（``result["fields"]``）。传入时跳过对
+    ``tender_path`` 的重新解析（Web 任务复用已有抽取结果的入口）；
+    关系抽取仍按 ``use_llm`` 走原文。
     """
     extractor = Extractor(config_dir=config_dir, settings_override=settings_override)
-    extracted = extractor.extract(tender_path, use_llm=use_llm)
-    fields = extracted.to_dict().get("fields", {})
+    if fields is None:
+        extracted = extractor.extract(tender_path, use_llm=use_llm)
+        fields = extracted.to_dict().get("fields", {})
 
     profile = CompanyProfile.load(profile_path)
     project_name = _field_value(fields, "project_name") or "本项目"

@@ -128,12 +128,15 @@ class GraphData:
     project_name: str = ""
     nodes: list[Node] = field(default_factory=list)
     edges: list[Edge] = field(default_factory=list)
+    # 关系为空时由规则层补的节点来源，如 {"disqualifications": "规则层★条款兜底"}
+    fallbacks: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "project_name": self.project_name,
             "nodes": [node.to_dict() for node in self.nodes],
             "edges": [edge.to_dict() for edge in self.edges],
+            "fallbacks": dict(self.fallbacks),
         }
 
     def nodes_of_type(self, rdf_type: str) -> list[Node]:
@@ -151,6 +154,34 @@ def _field_value(fields: dict[str, Any], key: str) -> str:
     return str(value)
 
 
+def _star_clause_fallback(result_dict: dict[str, Any]) -> list[dict[str, str]]:
+    """规则层 ★ 条款转废标条款节点。
+
+    需求报告里「★不满足即废标」常写在标的清单表格中，不在「废标/无效投标」
+    章节里，模型关系抽取容易整体返回空数组。规则层已按行抽到 ``star_clauses``，
+    直接复用，避免图谱风险清单在演示时是空表。
+    """
+    structured = result_dict.get("structured") or {}
+    out: list[dict[str, str]] = []
+    for raw in structured.get("star_clauses") or []:
+        if not isinstance(raw, dict):
+            continue
+        if "★" not in str(raw.get("type") or ""):
+            continue
+        text = str(raw.get("text") or "").strip()
+        if not text:
+            continue
+        out.append(
+            {
+                "name": text,
+                "value": "实质性条款（不满足即废标）",
+                "evidence": text,
+                "section": str(raw.get("item_name") or ""),
+            }
+        )
+    return out
+
+
 def build_graph_from_result(
     result_dict: dict[str, Any],
     relations_dict: dict[str, Any],
@@ -159,6 +190,13 @@ def build_graph_from_result(
     fields = result_dict.get("fields", {}) or {}
     nodes: list[Node] = []
     edges: list[Edge] = []
+    fallbacks: dict[str, str] = {}
+    relations = {kind: list(relations_dict.get(kind) or []) for kind in KIND_PREDICATE}
+    if not relations["disqualifications"]:
+        star_items = _star_clause_fallback(result_dict)
+        if star_items:
+            relations["disqualifications"] = star_items
+            fallbacks["disqualifications"] = "LLM 未返回废标条款，已用规则层★条款补齐"
 
     project_label = _field_value(fields, "project_name") or "未命名项目"
     project_props: dict[str, str] = {}
@@ -177,7 +215,7 @@ def build_graph_from_result(
         predicate = KIND_PREDICATE[kind]
         rdf_type = KIND_TYPE[kind]
         prefix = KIND_PREFIX[kind]
-        for index, raw in enumerate(relations_dict.get(kind, []) or [], start=1):
+        for index, raw in enumerate(relations[kind], start=1):
             if not isinstance(raw, dict):
                 continue
             name = str(raw.get("name") or "").strip()
@@ -206,7 +244,12 @@ def build_graph_from_result(
         nodes.append(Node("payment", "PaymentTerm", settlement or "付款条款", props))
         edges.append(Edge("project", "hasPaymentTerm", "payment"))
 
-    return GraphData(project_name=project_label, nodes=nodes, edges=edges)
+    return GraphData(
+        project_name=project_label,
+        nodes=nodes,
+        edges=edges,
+        fallbacks=fallbacks,
+    )
 
 
 def _slug(value: str) -> str:

@@ -189,3 +189,47 @@ class ExtractionResult:
             "review": _clean_json_value(self.review),
             "audit": _clean_json_value(self.audit),
         }
+
+
+def extraction_result_from_dict(data: dict[str, Any]) -> "ExtractionResult":
+    """从 to_dict() 输出重建 ExtractionResult（持久化恢复、跨进程传输用）。
+
+    覆盖 doc_generator 依赖的 source / template_values() / fields 全部数据面；
+    blocks 级原文不重建（不影响模板回填与字段展示）。
+    """
+    fields: dict[str, FieldValue] = {}
+    for key, item in (data.get("fields") or {}).items():
+        evidence = [
+            Evidence(
+                block_id=str(ev.get("block_id", "")),
+                quote=str(ev.get("quote", "")),
+                section=str(ev.get("section", "")),
+            )
+            for ev in (item.get("evidence") or [])
+        ]
+        fields[key] = FieldValue(
+            key=str(item.get("key", key)),
+            label=str(item.get("label", key)),
+            template=item.get("template"),
+            value=item.get("value"),
+            raw_value=item.get("raw_value"),
+            confidence=float(item.get("confidence") or 0.0),
+            status=str(item.get("status", "missing")),
+            source=str(item.get("source", "none")),
+            evidence=evidence,
+            errors=list(item.get("errors") or []),
+            warnings=list(item.get("warnings") or []),
+            attempts=int(item.get("attempts") or 0),
+            notes=str(item.get("notes") or ""),
+        )
+    return ExtractionResult(
+        source=dict(data.get("source") or {}),
+        meta=dict(data.get("meta") or {}),
+        fields=fields,
+        structured=dict(data.get("structured") or {}),
+        validation=dict(data.get("validation") or {}),
+        cleaning=dict(data.get("cleaning") or {}),
+        review=list(data.get("review") or []),
+        audit=dict(data.get("audit") or {}),
+        document_type=dict(data.get("document_type") or {}),
+    )
