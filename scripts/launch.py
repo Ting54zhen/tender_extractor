@@ -286,6 +286,24 @@ def do_web(extra: list[str] | None = None) -> int:
         return 0
 
 
+def do_exe() -> int:
+    """启动已打包的免 Python 版本（dist/招标需求解析.exe）。"""
+    target = ROOT / "dist" / "招标需求解析.exe"
+    if not target.is_file():
+        say("")
+        say("[提示] 还没有打包产物，先运行：.venv\\Scripts\\python scripts\\build_exe.py")
+        return 1
+    say("")
+    say(f"[exe] 启动 {target.name}，浏览器会自动打开")
+    proc = subprocess.Popen([str(target)], cwd=str(target.parent), env=_env())
+    try:
+        return proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        say("\n[exe] 已停止")
+        return 0
+
+
 def interactive() -> int:
     say("")
     say("招标需求解析组件 · 快速启动")
@@ -303,6 +321,7 @@ def interactive() -> int:
         "  5) 安装 PDF 支持\n"
         "  6) 运行测试\n"
         "  7) 打开网页界面（本机浏览器）\n"
+        "  8) 启动打包版 exe（免 Python 演示）\n"
         "  0) 退出"
     )
     actions = {
@@ -313,6 +332,7 @@ def interactive() -> int:
         "5": do_install_pdf,
         "6": do_tests,
         "7": do_web,
+        "8": do_exe,
     }
 
     while True:
@@ -323,7 +343,7 @@ def interactive() -> int:
             return 0
         action = actions.get(choice)
         if action is None:
-            say("[提示] 请输入 0-7 之间的编号")
+            say("[提示] 请输入 0-8 之间的编号")
             continue
         action()
         ask("\n按回车返回菜单...")

@@ -6,6 +6,7 @@ __pycache__/
 # 打包与安装产物
 build/
 dist/
+*.spec
 *.egg-info/
 .eggs/
 
