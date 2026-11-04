@@ -5,7 +5,6 @@
 > 本文档说明**每个目录/文件干什么**、**谁在维护**、**协作怎么约定**。新成员请先读完本文。
 
 ---
-
 ## 一、技术栈与设计约束
 
 | 项 | 内容 |
@@ -15,7 +14,7 @@
 | 模型接入 | 本地 Ollama（默认）或任意 OpenAI 兼容接口 |
 | Web 服务 | Python 标准库 `http.server`，**不引入 Web 框架** |
 | 前端 | 纯 HTML/CSS/JS，**无 CDN、无构建工具、无外部依赖** |
-| 测试 | pytest（共 11 个测试文件） |
+| 测试 | pytest（共 15 个测试文件 / 99 项，当前全绿） |
 
 **三条硬约束（改动前必须知道）：**
 
@@ -41,6 +40,7 @@
 ├── pyproject.toml          # 包元数据与依赖
 ├── start.bat               # Windows 一键启动
 ├── README.md               # 项目介绍与快速开始
+├── AGENTS.md               # AI 协作规则（任何 AI 会话先读这一份）
 └── DEVELOPMENT.md          # 本文档
 ```
 
@@ -54,7 +54,8 @@
 | `templates/` | 招标文件模板：源模板（单花括号占位符）+ `compiled/`（jinja2 渲染版，由 `prepare_template.py` 生成） | 产品 | ✅ |
 | `samples/` | **脱敏后**的样本，供团队协作与回归测试（脱敏标准见 `samples/README.md`） | 全员 | ✅ |
 | `data/` | 真实采购样本、抽取输出、投标文件 —— **含真实单位信息，严禁提交** | 各人本地 | ❌ |
-| `docs/` | GitHub Pages 站点（项目展示页） | 产品 | ✅ |
+| `docs/` | GitHub Pages 站点（项目展示页），对外公开，不放内部文档 | 产品 | ✅ |
+| `AGENTS.md` | AI 协作规则：三条硬约束、编码与测试要求、禁止清单；任何 AI 会话先读 | 全员 | ✅ |
 
 ---
 
@@ -204,8 +205,11 @@
 | `test_openai_client.py` | OpenAI 兼容客户端（mock 请求/响应） |
 | `test_report.py` | 审核报告渲染 |
 | `test_doc_generator.py` | 招标文件生成：填充、缺失标记、参数校验 |
+| `test_phone_extraction.py` | 联系电话抽取与去空格归一化 |
+| `test_storage.py` | SQLite 持久化（项目/任务/确认值/设置，重启恢复） |
+| `test_web_api.py` | Web API（任务/确认值/历史值/AI 建议/投标书/图谱/zip 导出） |
 
-**约定：改动 `src/` 后必须跑全量测试且全绿才能提交。**
+**约定：改动 `src/` 后必须跑全量测试且全绿才能提交。测试细则见 `AGENTS.md` 第 7 节。**
 
 ```bash
 python -m pytest tests -q
@@ -244,13 +248,53 @@ git diff --cached --stat    # 确认变更范围符合预期
 
 ### 8.2 分支模型（简化 GitHub Flow）
 
+**长期分支只有 `main` 一条。**
+
 ```
-main          ← 稳定分支，只接受 PR 合并，不直接提交
-feature/<模块>-<简述>   ← 功能分支，例：feature/frontend-upload-progress
-fix/<简述>              ← 修复分支
+main   ← 随时可运行、可打包；不直接 push，只接受 PR
 ```
 
-流程：从 `main` 拉分支 → 本地自测（前端：`start.bat web`；后端：`pytest`）→ 提交 PR → 至少 1 人 review → 合并回 `main`。
+不设 `develop`：2–3 人规模，多一条长期分支只会多一层合并成本。
+
+**短期分支命名**
+
+| 前缀 | 用途 | 示例 |
+|---|---|---|
+| `feature/<scope>-<简述>` | 新功能 | `feature/compliance-check` |
+| `fix/<scope>-<简述>` | 修缺陷 | `fix/rules-phone-match` |
+| `refactor/<scope>-<简述>` | 不改行为的重构 | `refactor/web-router` |
+| `docs/<简述>` | 文档 | `docs/deploy-macos` |
+| `chore/<简述>` | 依赖、脚本、打包 | `chore/build-exe-pathsep` |
+
+`<scope>` 取模块名：`frontend`、`pipeline`、`web`、`rules`、`templates`、`graph`。
+
+**生命周期**：从最新 `main` 拉出 → 开发 + 自测 → 提交 PR → 1 人 review → Squash merge → 删分支。
+分支存活不超过 2 周，超过说明任务该拆。
+
+**按第十一节计划的分支安排**
+
+| 计划项 | 分支名 | 基线 | 依赖 | 主要改动 |
+|---|---|---|---|---|
+| 0. 现有工作区收尾 | `chore/worktree-cleanup` | `main` | 无 | 全部（先清干净再开新分支） |
+| 1. 合规审查 v1 | `feature/compliance-check` | `main` | 无 | 新增 `compliance*.py`、`tests/` |
+| 2. 模板库扩展 | `feature/template-library` | `main` | 无（可与 1 并行） | `templates/`、`config/fields.json` |
+| 3. 评标办法生成器 | `feature/scoring-generator` | `main` | **等 1 合并**（复用合规口径） | 新增 `scoring*.py` |
+| 4. 多标段 / 分包 | `feature/multi-lot` | `main` | 无 | `platform_adapter.py` |
+| 5. 脱敏样本补充 | `chore/samples-round-1` | `main` | 建议随 2 一起 | `samples/` |
+| 前端改造（持续性） | `feature/frontend-<简述>` | `main` | 无 | `frontend/` |
+
+**两人并行怎么排**
+
+- 第一周：A 开 1，B 开 2（互不碰文件）
+- 第二周：A 继续 1 或转 4，B 开 3（前提是 1 已合并进 `main`）
+- 前端只改 `frontend/`，任何时候都能并行，不参与上面的串行依赖
+
+**发版：用 tag，不用 release 分支**
+
+- 功能合并进 `main` 后打 `v0.x.0` → 跑 `build_exe.py` + `check_exe.py` → 产物传 GitHub Release
+- 线上问题走 `fix/*` → PR → 合并 → 打补丁 tag `v0.x.1`
+
+**PR 要求**：改 `src/` 必须带测试且 `pytest` 全绿；改 `frontend/` 附一张改动后的截图；改 API 契约按 8.4 同步 `frontend/README.md`。
 
 ### 8.3 提交信息规范
 
@@ -275,8 +319,8 @@ scope: 模块名，如 frontend、pipeline、cli、graph
 
 ```bash
 # 1. 克隆
-git clone git@github.com:Ting54zhen/-jp.git
-cd -jp
+git clone git@github.com:Ting54zhen/tender_extractor.git
+cd tender_extractor
 
 # 2. 一键准备环境（创建 .venv、安装依赖、检查模型服务）
 start.bat setup --dev
@@ -319,15 +363,24 @@ ollama list        # 需要 qwen2.5:7b-instruct-q4_K_M 与 qwen2.5:1.5b-instruct
 
 ## 十一、当前状态与下一步
 
-**已完成：** 模块化改造（前后端解耦、数据隔离）、历史敏感数据清洗、GitHub 同步、SSH 环境修复、
-**招标文件生成器 v1**（`doc_generator.py` + `generate` 子命令，真实样本填充率 87%）。
+> 本节是**进度的唯一来源**。完成一项就从「下一步」移到「已完成」；新增待办加在这里并写清启动条件。
 
 **产品主线：** AI 招标文件制作软件 —— 输入采购需求报告，输出完整招标文件。
 
+**已完成：**
+
+- 模块化改造：前后端解耦、`data/` 隔离、标准模板入库；GitHub 同步与 SSH 环境修复。
+- 抽取引擎三道防线：规则层（不依赖模型）→ 模型补缺 + 证据核验 → 第三方复核；含跨字段勾稽、文档类型前置校验、校验失败回喂（≤2 轮）。
+- 招标文件生成器：字段占位符回填 + **结构化表格回填**（主要商务要求表、标的清单简表/详表、每标的一张技术参数附表，共 8 张附表）；编制规范默认值兜底；采购人地址回退推断。
+- Web 工作台：项目归档 `/projects`、填写页 `/fill`（历史值复用 / AI 建议采纳 / 标的清单导入）、企业档案 `/company`、设置 `/settings`；「生成招标文件」按钮、PDF 导出、项目级 zip 导出均已上线。
+- SQLite 持久化（`storage.py`）：项目、任务、字段确认值、设置覆盖，重启可恢复。
+- 免 Python 分发：`build_exe.py` 单文件 exe + `check_exe.py` 自动验收。
+- 测试 99 项 / 15 个文件，全绿。
+
 **下一步（优先级从高到低）：**
 
-1. 合规审查 v1：排他性/倾向性条款规则库；
-2. 模板库扩展（货物/服务/工程，公开招标/竞争性磋商）与模板管理；
-3. 评标办法生成器（评分细则初稿）；
-4. 脱敏样本补充（`samples/`）；
-5. Web 端接入「生成招标文件」按钮与在线预览。
+1. **合规审查 v1**：排他性/倾向性条款规则库（判定 + 分级 + 修改建议）。当前源码中尚无任何实现，是从零开始的新模块；启动前需先定判定口径与误报容忍度。
+2. **模板库扩展**：货物 / 服务 / 工程 × 公开招标 / 竞争性磋商，配套模板管理。依赖先拿到各类模板的原件。
+3. **评标办法生成器**：评分细则初稿。依赖第 1 项的合规口径（评分项不得含倾向性）。
+4. **多标段 / 分包识别**：`platform_adapter` 目前固定输出单包 `P1`。
+5. **脱敏样本补充**（`samples/`）：每类模板至少一份，供回归评测。
