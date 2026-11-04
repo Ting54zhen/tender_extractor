@@ -10,11 +10,11 @@
 | 项 | 内容 |
 |----|------|
 | 语言 | Python 3.10+（当前开发环境 3.12） |
-| 运行时依赖 | 仅 `python-docx`（PDF 需可选安装 `pdfplumber`） |
+| 运行时依赖 | `python-docx`、`docxtpl`（PDF 需可选安装 `pdfplumber`） |
 | 模型接入 | 本地 Ollama（默认）或任意 OpenAI 兼容接口 |
 | Web 服务 | Python 标准库 `http.server`，**不引入 Web 框架** |
 | 前端 | 纯 HTML/CSS/JS，**无 CDN、无构建工具、无外部依赖** |
-| 测试 | pytest（共 15 个测试文件 / 99 项，当前全绿） |
+| 测试 | pytest（共 15 个测试文件 / 101 项，当前全绿） |
 
 **三条硬约束（改动前必须知道）：**
 
@@ -67,7 +67,7 @@
 |------|------|
 | `__init__.py` | 包入口与对外 API：导出 `Extractor`、`ExtractionResult`，提供一行式 `extract_document()` |
 | `__main__.py` | `python -m tender_extractor` 直启入口，转发到 `cli.main()` |
-| `cli.py` | 命令行入口（`extract` / `inspect` / `health`），用于联调、批量跑样本与回归 |
+| `cli.py` | 命令行入口（`extract` / `generate` / `inspect` / `health`），用于联调、批量跑样本与回归 |
 | `web.py` | 本地 Web 服务：上传 → 后台线程抽取 → 轮询状态；API 与前端目录托管（见第四节） |
 
 ### 2. 文档解析层
@@ -111,7 +111,7 @@
 | `pipeline.py` | 编排核心 `Extractor`：解析 → 规则 → LLM → 合并 → 清洗 → 校验 → 回喂 → 复核 → 输出 |
 | `platform_adapter.py` | 平台适配：抽取结果 → 科瑞招标平台 AI 草稿 JSON（平台契约见文件头注释） |
 | `report.py` | 审核报告渲染：字段值 + 证据 + 冲突 + 校验错误 + 条款 + 模板回填 + 审计信息 |
-| `doc_generator.py` | **招标文件生成**：抽取结果 + compiled 模板 → 完整 `.docx`；缺失字段标记「待补充」，不编造 |
+| `doc_generator.py` | **招标文件生成**：抽取结果 + compiled 模板 → 完整 `.docx`；字段占位符回填 + 结构化表格渲染（商务要求表、标的清单、每标的一张技术参数附表），缺失字段标记「待补充」，不编造 |
 
 ### 7. 知识图谱层
 
@@ -139,15 +139,28 @@
 | `settings.json` | 运行参数：`llm`（抽取模型）、`review`（复核模型）、`extraction`（阈值）、`output`（输出目录） |
 | `company_profile.example.json` | 企业档案示例；使用时复制为 `company_profile.json`（已被 git 忽略） |
 
+### 10. 持久化与基础设施
+
+| 文件 | 职责 |
+|------|------|
+| `storage.py` | SQLite 持久化（`projects` / `jobs` / `field_values` / `settings` 四表）：短连接 + WAL，适配多线程 Web |
+| `paths.py` | 运行时路径解析：源码运行取工程根、打包后取 exe 同目录，数据统一落 `data/`（兼容 PyInstaller 单文件） |
+
 ---
 
 ## 四、前端模块（`frontend/`）
 
 | 文件 | 页面 | 职责 |
 |------|------|------|
-| `index.html` | 主页面 | 上传采购需求报告 → 展示结构化字段、证据、复核清单、模板映射、审核报告 |
-| `compare.html` | 比对页 | 双文档比对：招标文件 + 投标文件 → 符合性比对结果 |
-| `README.md` | — | 前端协作说明与 API 契约表 |
+| `shell.js` | 全站 | 注入左侧导航外壳（品牌、主操作、入口、本机状态） |
+| `app.css` | 全站 | 设计系统：色板、排版、按钮、表格、表单、卡片与响应式规则 |
+| `index.html` | 需求解析 `/` | 上传采购需求报告 → 展示结构化字段、证据、复核清单、模板映射、审核报告 |
+| `fill.html` | 填写工作台 `/fill` | 逐字段核对/编辑，历史值复用、AI 建议采纳、标的清单导入、生成招标文件 |
+| `compare.html` | 文档比对 `/compare` | L2 双文档比对：招标文件 + 投标文件 → 符合性比对结果 |
+| `projects.html` · `projects.js` · `projects.css` | 项目工作台 `/projects` | 按采购项目归档任务、查看历史结果、归档/恢复、项目级 zip 导出 |
+| `company.html` · `company.js` | 企业档案 `/company` | 维护资质、业绩、人员与证明材料索引 |
+| `settings.html` · `settings.js` | 设置 `/settings` | 模型接入、第三方复核、抽取阈值与输出目录的可视化覆盖 |
+| `README.md` | — | 前端协作说明、页面骨架与 API 契约表 |
 
 **前端与后端的解耦方式：**
 
@@ -157,6 +170,8 @@
 环境变量 TENDER_FRONTEND_DIR  →  项目根 frontend/  →  包内 static/（兜底）
 ```
 
+页面路由与文件同名（`/` → `index.html`、`/fill` → `fill.html`、`/compare` → `compare.html`、`/projects` → `projects.html`、`/company` → `company.html`、`/settings` → `settings.html`），`/assets/*` 映射到本目录内的 css/js。
+
 因此前端成员**只改 `frontend/` 下的文件、刷新浏览器即生效**，不需要重启服务、不需要碰任何 Python 代码。
 
 **API 契约（改动需双方确认）：**
@@ -164,12 +179,29 @@
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/health` | 服务与模型状态 |
-| POST | `/api/extract?filename=...` | 上传文件并创建抽取任务 |
+| GET | `/api/settings` | 当前设置与本地覆盖值 |
+| POST | `/api/settings` | 保存设置覆盖 |
+| GET | `/api/company` | 企业档案 |
+| POST | `/api/company` | 保存企业档案 |
+| POST | `/api/extract` | 上传文件创建抽取任务（query：`filename`、`use_llm`、`allow_non_tender`、`project_id`） |
+| GET | `/api/jobs` | 任务列表（query：`project_id`） |
 | GET | `/api/jobs/{id}` | 任务状态与进度 |
+| GET | `/api/jobs/{id}/fields` | 字段视图（含确认值、历史值、模板映射） |
 | GET | `/api/jobs/{id}/result` | 抽取结果 JSON |
-| GET | `/api/jobs/{id}/report` | 审核报告 |
-| POST | `/api/compare` | 创建比对任务（multipart：tender + bid） |
+| GET | `/api/jobs/{id}/report` | 审核报告 Markdown |
+| GET | `/api/jobs/{id}/download/{json\|md\|draft}` | 下载结果 JSON / 审核报告 / 平台草稿 |
+| POST | `/api/jobs/{id}/confirm` | 保存人工确认的字段值（`{"values": [...]}`） |
+| POST | `/api/jobs/{id}/suggest` | 为缺失字段起草 AI 建议值（需人工采纳） |
+| POST | `/api/jobs/{id}/generate` | 按确认值生成招标文件并下载 `.docx` |
+| POST | `/api/jobs/{id}/export/pdf` | 招标文件转 PDF（LibreOffice / Word COM） |
+| POST | `/api/jobs/{id}/analyze` | 知识图谱风险分析（废标预警 / 符合性自查 / 评分点映射） |
+| POST | `/api/jobs/{id}/bid` | 生成投标书初稿（L2 缓行） |
+| POST | `/api/compare` | 创建比对任务（multipart：`tender` + `bid`） |
 | GET | `/api/jobs/{id}/compare` | 比对结果 |
+| GET / POST | `/api/projects` | 项目列表（`?status=`）/ 新建项目 |
+| GET | `/api/projects/{id}` | 项目详情（含任务列表） |
+| POST | `/api/projects/{id}/{archive\|restore\|rename\|delete}` | 项目归档 / 恢复 / 重命名 / 删除 |
+| POST | `/api/projects/{id}/export` | 项目内已完成任务打包 zip 下载 |
 
 ---
 
@@ -178,14 +210,20 @@
 | 文件 | 职责 |
 |------|------|
 | `start.bat` | Windows 一键启动入口（转调 `scripts/launch.py`） |
-| `scripts/launch.py` | 启动器：准备 `.venv`、检查依赖与模型服务、交互菜单、透传参数给 CLI |
+| `scripts/launch.py` | 启动器：准备 `.venv`、检查依赖与模型服务、交互菜单、透传参数给 CLI（`setup` / `test` / `web` / `extract` / `generate` …） |
+| `scripts/prepare_template.py` | 把源模板的单花括号占位符转换为 docxtpl（jinja2）语法，产出 `templates/compiled/` |
+| `scripts/analyze_template.py` | 只读分析：占位符清单、跨 run 分布、与 `fields.json` 的字段映射差异 |
 | `scripts/inspect_template.py` | 只读工具：打印 docx 模板的段落/表格结构，用于分析标准模板 |
+| `scripts/verify_generated.py` | 只读验证：生成的 `.docx` 是否有未渲染占位符、待补充标记统计 |
+| `scripts/check_compiled.py` | 只读诊断：compiled 模板里的占位符转换结果 |
+| `scripts/check_fields.py` | 只读诊断：打印指定字段的抽取结果 |
+| `scripts/debug_fields.py` | 只读诊断：定位字段原文上下文（所在段落/表格行及前后文） |
+| `scripts/analyze_missing.py` | 只读统计：抽取结果的缺失字段明细 |
+| `scripts/build_exe.py` | PyInstaller 打包单文件 exe（产物 `dist/`） |
+| `scripts/check_exe.py` | 打包后验收：在独立目录运行 dist 产物，验证页面与 DB 落位 |
 | `scripts/bid_gen_demo.py` | 投标书生成演示（L2 缓行，仅供研究） |
 | `scripts/eval_final.py` | 关系抽取效果评估（资格/评分点/废标条款的抽取输出） |
 | `examples/extract_demo.py` | 对外最小示例：演示 Python API 的调用方式 |
-| `scripts/prepare_template.py` | 把源模板的单花括号占位符转换为 docxtpl（jinja2）语法，产出 `templates/compiled/` |
-| `scripts/analyze_template.py` | 只读分析：占位符清单、跨 run 分布、与 `fields.json` 的字段映射差异 |
-| `scripts/verify_generated.py` | 只读验证：生成的 `.docx` 是否有未渲染占位符、待补充标记统计 |
 
 ---
 
@@ -375,7 +413,7 @@ ollama list        # 需要 qwen2.5:7b-instruct-q4_K_M 与 qwen2.5:1.5b-instruct
 - Web 工作台：项目归档 `/projects`、填写页 `/fill`（历史值复用 / AI 建议采纳 / 标的清单导入）、企业档案 `/company`、设置 `/settings`；「生成招标文件」按钮、PDF 导出、项目级 zip 导出均已上线。
 - SQLite 持久化（`storage.py`）：项目、任务、字段确认值、设置覆盖，重启可恢复。
 - 免 Python 分发：`build_exe.py` 单文件 exe + `check_exe.py` 自动验收。
-- 测试 99 项 / 15 个文件，全绿。
+- 测试 101 项 / 15 个文件，全绿。
 
 **下一步（优先级从高到低）：**
 
