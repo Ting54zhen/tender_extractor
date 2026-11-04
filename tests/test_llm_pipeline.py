@@ -105,7 +105,7 @@ class _MockOllama(BaseHTTPRequestHandler):
                     "evidence": "知识产权归采购人所有。",
                 }
             ]
-        elif "项目基本信息" in user:
+        elif "项目概况" in user or "项目基本信息" in user:
             self.groups.append("basic")
             fields = []
         else:
@@ -185,7 +185,10 @@ def test_repair_loop_feeds_validation_errors_back_to_model(tmp_path):
         server.server_close()
 
     rounds = result["audit"]["repair_rounds"]
-    assert result["audit"]["llm"]["calls"] >= 4  # 3 个抽取分组 + 1 次修复
+    sent_groups = result["audit"]["llm"]["groups"]
+    # 每个「有缺口」的分组一次调用 + 每轮回喂一次，不写死分组数
+    assert sent_groups, "至少应有一个分组被送去补缺"
+    assert result["audit"]["llm"]["calls"] == len(sent_groups) + len(rounds)
     assert len(rounds) == 1
     assert "candidate_count" in rounds[0]["requested"]
     assert "candidate_count" in rounds[0]["accepted"]

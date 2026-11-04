@@ -90,6 +90,20 @@ def test_rule_only_extraction(tmp_path):
     template_values = data["template_values"]
     assert template_values["项目名称"] == "测试项目（一期）"
     assert template_values["预算金额"] == "100,000.0000元"
+
+    # 采购标的清单：标的表逐项成清单，且不因重排格式被判「未在原文定位」
+    target_list = fields["procurement_target_list"]
+    assert target_list["status"] == "ok"
+    assert "1. 平台运维" in target_list["value"]
+    assert "数量2年" in target_list["value"]
+    assert "金额100,000.00元" in target_list["value"]
+    assert "7×24小时响应" in target_list["value"]  # 要求摘要保留
+
+    # 实质性条款清单：★▲ 条款从结构化结果承接为可见字段
+    star = fields["star_clauses_summary"]
+    assert star["status"] == "ok"
+    assert "[★]" in star["value"]
+    assert "7×24小时响应" in star["value"]
     assert template_values["采购人"] == "某某单位"
 
 
@@ -207,3 +221,40 @@ def test_extract_document_helper(tmp_path):
     assert isinstance(result.template_values(), dict)
     assert "项目名称" in result.template_values()
     assert result.missing_templates()
+
+
+def _build_delivery_docx(path, delivery_place):
+    doc = DocxDocument()
+    doc.add_paragraph("某某学院采购需求报告")
+    doc.add_paragraph("一、项目概况")
+    doc.add_paragraph("项目名称：某项目")
+    doc.add_paragraph("采购方式：公开招标")
+    doc.add_paragraph("五、采购项目交付或实施的时间和地点")
+    doc.add_paragraph(f"自合同签订之日起至2025年12月31日止，于{delivery_place}交付。")
+    doc.save(str(path))
+
+
+def test_purchaser_address_inferred_from_delivery(tmp_path):
+    """交付地点明确是采购人单位时，回退推断采购人地址。"""
+    path = tmp_path / "交付地址.docx"
+    _build_delivery_docx(path, "某某市某某路1号某某学院")
+
+    extractor = Extractor(settings_override={"llm": {"enabled": False}})
+    fields = extractor.extract(path, use_llm=False).to_dict()["fields"]
+
+    address = fields["purchaser_address"]
+    assert address["value"] == "某某市某某路1号某某学院"
+    assert address["source"] == "inferred"
+
+
+def test_purchaser_address_not_inferred_from_third_party_place(tmp_path):
+    """交付地点不含采购人单位/机构词时，不做推断，避免误判第三方实施地点。"""
+    path = tmp_path / "第三方地点.docx"
+    _build_delivery_docx(path, "某某市某某路1号")
+
+    extractor = Extractor(settings_override={"llm": {"enabled": False}})
+    fields = extractor.extract(path, use_llm=False).to_dict()["fields"]
+
+    address = fields["purchaser_address"]
+    assert address["value"] in (None, "")
+    assert address["status"] == "missing"

@@ -894,6 +894,22 @@ def _enum_from_text(doc: Document, patterns: Iterable[str], enum_name: str) -> C
     return None
 
 
+def _looks_like_purchaser_address(place: str, purchaser_name: str) -> bool:
+    """判断交付地点能否视为采购人地址。
+
+    只有「采购人全名出现在交付地点」或「交付地点含机构后缀词」时才回退推断，
+    避免把「采购人指定第三方实施地点」误判成采购人地址。
+    """
+    if not place:
+        return False
+    if purchaser_name and purchaser_name in place:
+        return True
+    return any(
+        marker in place
+        for marker in ("学院", "大学", "学校", "中心", "医院", "研究院", "局", "委员会", "办公室")
+    )
+
+
 def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutput:
     kvs = collect_kvs(doc)
     output = RulesOutput(kvs=kvs)
@@ -1049,6 +1065,46 @@ def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutp
     if target:
         output.candidates["procurement_target"] = target
 
+    # 采购标的清单：标的表往往有多行（每行一个标的及其数量/单价/金额），
+    # 单值 procurement_target 装不下；生成多行清单字段供展示与回链。
+    if items and "procurement_target_list" not in output.candidates:
+        lines: list[str] = []
+        for i, item in enumerate(items, 1):
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            part = f"{i}. {name}"
+            detail: list[str] = []
+            quantity = item.get("quantity")
+            unit = str(item.get("unit") or "").strip()
+            if quantity is not None:
+                detail.append(f"数量{quantity:g}{unit}" if unit else f"数量{quantity:g}")
+            unit_price = item.get("unit_price")
+            if unit_price is not None:
+                detail.append(f"单价{unit_price:,.2f}元")
+            amount = item.get("amount")
+            if amount is not None:
+                detail.append(f"金额{amount:,.2f}元")
+            if detail:
+                part += "（" + "，".join(detail) + "）"
+            requirement = str(item.get("requirement") or "").strip()
+            if requirement:
+                summary = re.sub(r"\s+", " ", requirement)[:80]
+                part += "：" + summary + ("…" if len(requirement) > 80 else "")
+            lines.append(part)
+        if lines:
+            quote = "、".join(
+                str(item.get("name") or "") for item in items if item.get("name")
+            )
+            output.candidates["procurement_target_list"] = _candidate(
+                "\n".join(lines),
+                0.9,
+                "table",
+                items_block,
+                quote=quote,
+                note=f"采购标的表共 {len(items)} 项",
+            )
+
     if "procurement_item" not in output.candidates and items:
         category = next((str(item.get("category") or "") for item in items if item.get("category")), "")
         if category:
@@ -1138,12 +1194,62 @@ def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutp
     output.structured["business_requirements"] = business
     output.structured["procurement_items"] = items
     output.structured["procurement_total_declared"] = declared_total
-    output.structured["qualifications"] = extract_section_text(
+    qualification_text = extract_section_text(
         doc, ["资格", "供应商资格"], fallback_keywords=["投标人应具备", "资格要求"]
     )
+    output.structured["qualifications"] = qualification_text
     output.structured["after_sales"] = extract_section_text(
         doc, ["售后", "培训"], fallback_keywords=["质保", "售后服务"]
     )
+
+    # 供应商资格要求：资格章节整章内容以多行清单字段承接（原文有 16+ 块内容，
+    # 此前只有 sme_policy 一个字段能碰到这一章，资格条款本身无字段可见）。
+    if qualification_text.strip() and "qualification_requirements" not in output.candidates:
+        qual_block = next(
+            (
+                block for block in doc.blocks
+                if block.kind == "paragraph"
+                and any(word in block.section or word in " ".join(block.section_path)
+                        for word in ("资格", "供应商资格"))
+            ),
+            None,
+        )
+        lines = [
+            line.strip() for line in qualification_text.splitlines() if line.strip()
+        ]
+        if lines:
+            output.candidates["qualification_requirements"] = _candidate(
+                "\n".join(lines),
+                0.85,
+                "section",
+                qual_block,
+                quote=lines[0][:120],
+                note=f"资格章节共 {len(lines)} 条",
+            )
+
+    # ★▲ 实质性条款清单：星标/三角标条款是「不满足即废标」的关键约束，
+    # 结构化里已有 11+ 条，此前无字段承接，填写页与审核报告完全不可见。
+    if items and "star_clauses_summary" not in output.candidates:
+        star_lines: list[str] = []
+        for clause in extract_star_clauses(items):
+            marker = str(clause.get("type") or "").strip() or "★"
+            item_name = str(clause.get("item_name") or "").strip()
+            content = str(clause.get("text") or "").strip()
+            line = f"[{marker}] {item_name}：{content}" if item_name else f"[{marker}] {content}"
+            if len(line) > 120:
+                line = line[:119] + "…"
+            if line.strip():
+                star_lines.append(line)
+        if star_lines:
+            star_block = items_block
+            output.candidates["star_clauses_summary"] = _candidate(
+                "\n".join(star_lines),
+                0.85,
+                "table",
+                star_block,
+                quote="★▲",
+                note=f"实质性条款共 {len(star_lines)} 条",
+            )
 
     budget = None
     budget_precision = int(fields.get("budget_amount", {}).get("precision", 2))
@@ -1196,7 +1302,20 @@ def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutp
             evidence=[_evidence(business_block, settlement_text)] if business_block else [],
         )
 
-    # 采购人地址只认原文显式字段；交付地点不等于采购人地址，不做推断。
+    # 采购人地址：优先原文显式字段；未抽到时，仅当交付地点明显是采购人单位才回退推断。
+    purchaser_address_candidate = output.candidates.get("purchaser_address")
+    if not purchaser_address_candidate or not purchaser_address_candidate.value:
+        place = clean_text(delivery.get("detail_place") or delivery.get("place") or "")
+        purchaser_name = ""
+        if "purchaser" in output.candidates:
+            purchaser_name = output.candidates["purchaser"].value or ""
+        if _looks_like_purchaser_address(place, purchaser_name):
+            output.candidates["purchaser_address"] = Candidate(
+                value=place,
+                confidence=0.6,
+                source="inferred",
+                note="从交付地点推断（交付地点即采购人单位），需人工确认",
+            )
 
     # 摘要兜底（LLM 可用时会覆盖）
     if project_name_candidate:

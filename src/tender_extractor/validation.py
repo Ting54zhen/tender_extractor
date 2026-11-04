@@ -209,10 +209,18 @@ def check_grounding(
     doc: Document,
     fuzzy_threshold: float = 0.86,
 ) -> tuple[bool, str]:
-    """验证值和证据是否能回链到原文。返回 (是否命中, 命中的原文片段)。"""
+    """验证值和证据是否能回链到原文。返回 (是否命中, 命中的原文片段)。
+
+    多行值（如采购标的清单）按行分别回链：每行都能在证据块中定位才算命中，
+    避免重排格式（加序号/汇总括号）被误判为改写。
+    """
     needle = normalize_for_match(value)
     if not needle:
         return False, ""
+
+    raw_text = str(value or "")
+    lines = [line for line in raw_text.splitlines() if normalize_for_match(line)]
+    multi_line = len(lines) >= 2
 
     for item in evidence:
         block = doc.block_by_id(getattr(item, "block_id", ""))
@@ -227,6 +235,40 @@ def check_grounding(
         quote = normalize_for_match(getattr(item, "quote", ""))
         if quote and (quote in haystack or needle in quote):
             return True, getattr(item, "quote", "")
+
+        if multi_line:
+            # 逐行匹配：每行取「名称部分」（去掉序号/★▲标记与括号/冒号后的
+            # 重排内容），能在证据块原文中定位即视为有据——重排格式不算改写。
+            def _strip_prefix(line: str) -> str:
+                part = re.sub(r"^\s*[\[（(]?\s*[★▲]\s*[\]）)]?\s*", "", line)
+                part = re.sub(r"^\s*\d+[.、)）]\s*", "", part)
+                return part
+
+            def _line_token(line: str) -> str:
+                name_part = re.split(r"[（(：:]", _strip_prefix(line), 1)[0].strip()
+                return normalize_for_match(name_part)
+
+            def _grounded_line(line: str) -> bool:
+                token = _line_token(line)
+                if not token or len(token) < 4:
+                    return True  # 过短或纯数字的行不作为否决依据
+                return token in haystack or token in quote
+
+            if all(_grounded_line(line) for line in lines):
+                return True, getattr(item, "quote", "")
+
+        if multi_line:
+            # 兜底：多行清单常跨多个原文块（资格章节十几块），evidence 只挂了
+            # 首块；改用全文匹配逐行核对（去除序号后取行首语义段）。
+            full_haystack = normalize_for_match(doc.full_text())
+
+            if all(
+                (lambda token: not token or len(token) < 4 or token in full_haystack)(
+                    _line_token(line)
+                )
+                for line in lines
+            ):
+                return True, getattr(item, "quote", "")
 
         # 长文本/OCR 场景下允许一定模糊匹配，按句比较，避免整块 SequenceMatcher 过慢。
         if len(needle) >= 6:
@@ -311,6 +353,57 @@ def cross_validate(
                     "code": "PREPAY_RATIO_MISMATCH",
                     "message": f"预付款比例与付款条款计算值不一致：字段 {field_ratio:.2%}，计算 {computed:.2%}",
                     "fields": ["contract_prepay_ratio"],
+                }
+            )
+
+    # ------------------------------------------------------------------
+    # 交叉校验 1：招标组织形式 vs 代理机构信息
+    # 自主（自行）招标时不应有代理机构；委托代理招标时应能识别出代理机构。
+    # ------------------------------------------------------------------
+    org_form = str(fields["tender_org_form"].value or "") if "tender_org_form" in fields else ""
+    agency_value = str(fields["agency"].value or "") if "agency" in fields else ""
+    is_self_org = any(word in org_form for word in ("自行", "自主", "本单位", "自己"))
+    is_agent_org = any(word in org_form for word in ("委托", "代理", "中介"))
+    if is_self_org and agency_value.strip() and agency_value.strip() != "无":
+        warnings.append(
+            {
+                "code": "ORG_FORM_AGENCY_CONFLICT",
+                "message": f"组织形式为「{org_form}」（自主招标），但识别到代理机构「{agency_value.strip()}」；请核对，自主招标时无需代理机构信息",
+                "fields": ["tender_org_form", "agency"],
+            }
+        )
+    if is_agent_org and not agency_value.strip():
+        warnings.append(
+            {
+                "code": "ORG_FORM_AGENCY_MISSING",
+                "message": "组织形式为委托代理招标，但未识别到采购代理机构名称；请补充或核对",
+                "fields": ["agency"],
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # 交叉校验 2：采购方式 vs 评审（成交）方法
+    # 竞争性磋商只允许综合评分法；竞争性谈判/询价只允许最低价成交。
+    # ------------------------------------------------------------------
+    method = str(fields["procurement_method"].value or "") if "procurement_method" in fields else ""
+    price_method = str(fields["price_method"].value or "") if "price_method" in fields else ""
+    if method and price_method:
+        is_comprehensive = "综合" in price_method
+        is_lowest = "最低" in price_method
+        if "磋商" in method and is_lowest:
+            errors.append(
+                {
+                    "code": "METHOD_PRICE_CONFLICT",
+                    "message": "竞争性磋商依法只能采用综合评分法，与识别到的评审方法「" + price_method + "」矛盾",
+                    "fields": ["procurement_method", "price_method"],
+                }
+            )
+        elif ("谈判" in method or "询价" in method) and is_comprehensive:
+            errors.append(
+                {
+                    "code": "METHOD_PRICE_CONFLICT",
+                    "message": f"{method}依法采用最低价成交法，与识别到的评审方法「{price_method}」矛盾",
+                    "fields": ["procurement_method", "price_method"],
                 }
             )
 
