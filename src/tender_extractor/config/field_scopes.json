@@ -1,0 +1,114 @@
+{
+  "version": "1.0.0",
+  "description": "填写工作台按「采购方式 / 业务类型 / 招标组织形式」决定要填哪些字段。这里只描述填写视图的规则，抽取层仍按 fields.json 抽全量字段，不改证据链。",
+  "axes": {
+    "method": {
+      "open": "公开招标",
+      "invite": "邀请招标",
+      "negotiation": "竞争性磋商",
+      "competitive": "竞争性谈判",
+      "inquiry": "询价",
+      "single": "单一来源"
+    },
+    "category": {
+      "goods": "货物类",
+      "service": "服务类",
+      "works": "工程类"
+    },
+    "org_form": {
+      "self": "自主招标",
+      "entrusted": "委托招标"
+    }
+  },
+  "na_rules": [
+    {
+      "when": { "org_form": ["self"] },
+      "fields": [
+        "agency", "agency_address", "agency_contact",
+        "agency_project_contact", "agency_project_phone", "agency_fee"
+      ],
+      "tag": "自主招标",
+      "reason": "自主（自行）招标由采购人自行组织，无需填写代理机构信息。"
+    },
+    {
+      "when": { "method": ["inquiry", "competitive", "single"] },
+      "fields": [
+        "business_score", "tech_score", "credit_score", "price_score",
+        "tech_review_item_1", "tech_review_score_1", "tech_review_content_1",
+        "business_review_item_1", "business_review_score_1", "business_review_content_1"
+      ],
+      "tag": "最低价成交",
+      "reason": "该采购方式按最低价成交或协商定价，不设综合评分细则。"
+    },
+    {
+      "when": { "method": ["single"] },
+      "fields": ["valid_supplier_count"],
+      "tag": "单一来源",
+      "reason": "单一来源只面向唯一供应商，无需「有效供应商家数」。"
+    }
+  ],
+  "label_overrides": {
+    "category": {
+      "goods": {
+        "contract_period": "合同交货期限",
+        "contract_scope": "合同供货范围",
+        "procurement_target": "采购货物名称"
+      },
+      "works": {
+        "contract_period": "合同工期",
+        "contract_scope": "合同承包范围",
+        "procurement_target": "工程内容"
+      },
+      "service": {}
+    }
+  },
+  "extra_fields": {
+    "by_all": [
+      { "key": "scope_import_allowed", "label": "是否允许采购进口产品", "field_type": "select", "options": ["否", "是"], "hint": "采购需求品目表的固定栏目，不允许时需写明依据。" },
+      { "key": "scope_core_products", "label": "核心产品", "field_type": "text", "hint": "品目表用「△」标注；相同品牌核心产品按一家供应商计算。" },
+      { "key": "scope_price_deduction", "label": "价格扣除比例与计算公式", "field_type": "text", "hint": "中小企业价格扣除，须写明适用对象、比例与计算公式。" },
+      { "key": "scope_item_weight", "label": "分项权重", "field_type": "text", "hint": "标的清单的「权重%」列，按项填写。" }
+    ],
+    "by_category": {
+      "goods": [
+        { "key": "scope_goods_warranty", "label": "质保期", "field_type": "text", "hint": "" }
+      ],
+      "works": [
+        { "key": "scope_works_bill", "label": "工程量清单与计价依据", "field_type": "text", "hint": "修缮、改造、安装项目须附工程量清单，并写明计价规范版本。" },
+        { "key": "scope_works_bid_ceiling", "label": "最高投标限价", "field_type": "money", "hint": "设有最高限价时填写，未设则留空。" },
+        { "key": "scope_works_warranty", "label": "质量保修期与保修范围", "field_type": "text", "hint": "含缺陷责任期约定。" },
+        { "key": "scope_works_acceptance", "label": "验收办法", "field_type": "text", "hint": "竣工验收的组织方式、标准与整改要求。" }
+      ],
+      "service": [
+        { "key": "scope_service_staff", "label": "人员配置要求", "field_type": "text", "hint": "人员类别、数量与持证要求。" },
+        { "key": "scope_service_after_sales", "label": "售后服务与培训要求", "field_type": "text", "hint": "响应时限、服务方式、培训场次与对象。" }
+      ]
+    },
+    "by_method": {
+      "negotiation": [
+        { "key": "scope_negotiation_last_offer", "label": "最后报价要求", "field_type": "text", "hint": "最后报价是响应文件的有效组成部分，须写明提交方式与时限。" }
+      ],
+      "single": [
+        { "key": "scope_single_reason", "label": "单一来源理由", "field_type": "long_text", "hint": "须说明只能从唯一供应商处采购的依据。" },
+        { "key": "scope_single_supplier", "label": "拟成交供应商", "field_type": "text", "hint": "" }
+      ]
+    }
+  },
+  "conflict_rules": [
+    {
+      "method": ["negotiation"],
+      "price_method_contains": "最低",
+      "message": "竞争性磋商依法只能采用综合评分法，请核对「报价方式 / 评审办法」。"
+    },
+    {
+      "method": ["competitive", "inquiry"],
+      "price_method_contains": "综合",
+      "message": "竞争性谈判、询价依法采用最低价成交法，请核对评审办法。"
+    },
+    {
+      "org_form": ["self"],
+      "agency_present": true,
+      "message": "自主招标通常不设代理机构，请核对组织形式或抽取到的代理机构信息。"
+    }
+  ]
+}

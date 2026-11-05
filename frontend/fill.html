@@ -6,6 +6,7 @@
 <title>招标文件填写工作台</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%232563eb'/%3E%3Cpath%20d='M10%207h8l5%205v13a1%201%200%200%201-1%201H10a1%201%200%200%201-1-1V8a1%201%200%200%201%201-1z'%20fill='%23fff'/%3E%3Cpath%20d='M18%207v5h5'%20fill='%23c2d8ff'/%3E%3Cpath%20d='M12.5%2016h7M12.5%2019.5h4.5'%20stroke='%232563eb'%20stroke-width='1.4'%20stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/assets/app.css">
+<link rel="stylesheet" href="/assets/preview.css">
 <style>
   /* 本页专属：页头进度、左侧分组导航、字段列表工作区 */
 
@@ -201,6 +202,85 @@
     from { opacity: 0; transform: translate(-50%, 8px); }
     to { opacity: 1; transform: translate(-50%, 0); }
   }
+
+  /* 项目类型：先定三个维度，字段区才按对应口径渲染 */
+  .scope-bar {
+    display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap;
+    padding: 12px 14px; margin: 0 0 12px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .scope-item { display: flex; flex-direction: column; gap: 5px; min-width: 150px; }
+  .scope-item label { font-size: 11px; color: var(--faint); letter-spacing: .04em; }
+  .scope-item select {
+    font: inherit; font-size: 13px; color: var(--ink); background: #fff;
+    padding: 6px 8px; min-height: 32px;
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  .scope-summary { flex: 1 1 200px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .scope-summary b { color: var(--ink-2); font-weight: 600; }
+  .scope-actions { display: flex; gap: 6px; align-items: center; }
+  .scope-gate { margin: 0 0 14px; }
+  .scope-gate[hidden] { display: none; }
+
+  /* 当前模板：生成前必须能看见用的是哪套，防止选错版式 */
+  .tpl-line {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 12.5px; color: var(--muted); margin: -4px 0 14px;
+  }
+  .tpl-line b { color: var(--ink-2); font-weight: 600; }
+  .tpl-line .spacer { flex: 1; }
+  .tpl-line[hidden] { display: none; }
+
+  /* 预览打开时改三栏；窄屏退化为抽屉 / Tab */
+  .app.with-preview {
+    grid-template-columns: 180px minmax(0, 1fr) minmax(360px, 460px); gap: 20px;
+  }
+  @media (max-width: 1280px) {
+    .app.with-preview { grid-template-columns: 180px minmax(0, 1fr); }
+    .preview-pane {
+      position: fixed; right: 0; top: 0; bottom: 0;
+      width: min(480px, 92vw); z-index: 40; padding: 14px;
+      max-height: none; border-radius: 0;
+      background: var(--bg); border-left: 1px solid var(--line);
+      box-shadow: var(--sh-3);
+    }
+  }
+  @media (max-width: 960px) {
+    .app.with-preview { grid-template-columns: 1fr; }
+    .app.with-preview .nav, .app.with-preview .fill-body { display: none; }
+    .preview-pane {
+      position: static; width: auto; padding: 0; max-height: none;
+      box-shadow: none; border: none;
+    }
+  }
+  .preview-pane[hidden] { display: none; }
+
+  /* 自定义字段：与 AI 抽取字段视觉区分，不显示置信度/原文证据 */
+  .field.custom::before { background: var(--blue-line); }
+  .field.custom .cf-tag {
+    font-size: 11px; color: var(--blue); background: var(--blue-soft);
+    border: 1px solid var(--blue-line); border-radius: 999px; padding: 1px 8px;
+  }
+  .cf-radios { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .cf-radios label {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 13px; color: var(--ink-2); cursor: pointer;
+  }
+  .cf-radios input { width: auto; }
+  .cf-hint { font-size: 11.5px; color: var(--faint); margin-top: 6px; line-height: 1.6; }
+  .dlg-body .cf-row { margin-top: 10px; }
+  .dlg-body .cf-row[hidden] { display: none; }
+
+  /* 模板选择器 */
+  .tpl-pick { max-height: 56vh; overflow: auto; margin-top: 8px; }
+  .tpl-pick .item {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 0; border-bottom: 1px solid var(--line-soft);
+  }
+  .tpl-pick .item:last-child { border-bottom: none; }
+  .tpl-pick .item .nm { font-size: 13.5px; font-weight: 600; }
+  .tpl-pick .item .meta { font-size: 11.5px; color: var(--muted); }
+  .tpl-pick .item .spacer { flex: 1; }
 </style>
 </head>
 <body>
@@ -215,6 +295,7 @@
         </div>
         <div class="fill-head-actions">
           <button class="btn ghost" id="btnAcceptAll">全部采纳 AI 值</button>
+          <button class="btn" id="btnPreview">预览</button>
           <button class="btn primary" id="btnGenerate">生成招标文件</button>
         </div>
       </div>
@@ -222,6 +303,33 @@
       <div class="progress">
         <div class="bar"><i id="barFill"></i></div>
         <div class="txt" id="progressText">已就绪 0 / 0</div>
+      </div>
+
+      <div class="scope-bar" id="scopeBar">
+        <div class="scope-item">
+          <label for="scopeMethod">采购方式</label>
+          <select id="scopeMethod"><option value="">请选择</option></select>
+        </div>
+        <div class="scope-item">
+          <label for="scopeCategory">业务类型</label>
+          <select id="scopeCategory"><option value="">请选择</option></select>
+        </div>
+        <div class="scope-item">
+          <label for="scopeOrgForm">招标组织形式</label>
+          <select id="scopeOrgForm"><option value="">请选择</option></select>
+        </div>
+        <div class="scope-summary" id="scopeSummary">先选好三项类型，再开始填写对应字段。</div>
+        <div class="scope-actions" id="scopeActions"></div>
+      </div>
+
+      <div id="scopeNotice" class="notice hidden"></div>
+      <div id="scopeGate" class="notice scope-gate" hidden>请先选择「采购方式 / 业务类型 / 招标组织形式」，字段区会按所选类型加载。</div>
+
+      <div class="tpl-line" id="tplLine" hidden>
+        <span>当前模板：<b id="tplName">—</b></span>
+        <span id="tplMeta"></span>
+        <div class="spacer"></div>
+        <button class="btn small ghost" id="btnPickTemplate">切换模板</button>
       </div>
 
       <div id="notice" class="notice hidden"></div>
@@ -239,6 +347,7 @@
               <button data-f="missing">缺失</button>
             </div>
             <div class="spacer"></div>
+            <button class="btn small" id="btnAddCustom">＋ 自定义字段</button>
             <button class="btn small" id="btnSuggest">AI 起草缺失字段</button>
             <label class="chip">缺失字段
               <select id="missingMode">
@@ -249,12 +358,92 @@
           </div>
           <div id="groups"></div>
         </div>
+
+        <aside class="preview-pane" id="previewPane" hidden>
+          <div class="pv-pane-head">
+            <h3>生成前预览</h3>
+            <div class="spacer"></div>
+            <span class="pv-stats" id="pvStats">—</span>
+            <button class="btn small ghost" id="btnClosePreview">关闭</button>
+          </div>
+          <div class="pv-pane-body">
+            <div class="pv-loading hidden" id="pvLoading">正在生成预览…</div>
+            <div class="preview-scroll"><div class="paper" id="paper"></div></div>
+          </div>
+          <div class="pv-pane-foot">
+            <label class="chip"><input type="checkbox" id="pvOnlyMissing"> 只看缺失</label>
+            <div class="spacer"></div>
+            <button class="btn small" id="btnRefreshPreview">刷新</button>
+            <button class="btn small primary" id="btnGenerate2">生成并下载</button>
+          </div>
+          <div class="pv-hint">预览为结构近似，字体与分页以生成的 .docx 为准；点黄色「待补充」或已填值可跳回字段。</div>
+        </aside>
       </div>
     </div>
   </main>
 </div>
 
+<dialog id="dlgTemplate">
+  <div class="dlg-body">
+    <h3>选择招标文件模板</h3>
+    <p style="font-size:12.5px;color:var(--muted);line-height:1.7;margin:0">
+      切换模板不会丢失已经填写的值。若新模板的占位符与字段库不匹配，成稿里会显示「待补充」。
+    </p>
+    <div class="tpl-pick" id="tplPick"></div>
+    <div class="dlg-foot"><button class="btn" id="tpClose">关闭</button></div>
+  </div>
+</dialog>
+
+<dialog id="dlgCustom">
+  <div class="dlg-body">
+    <h3 id="cfTitle">添加自定义字段</h3>
+    <label>字段名（必填）</label>
+    <input id="cfLabel" maxlength="60" placeholder="例如：履约保证金比例">
+    <label>字段值</label>
+    <textarea id="cfValue" rows="3"></textarea>
+    <label>类型</label>
+    <select id="cfType">
+      <option value="text">单行文本</option>
+      <option value="long_text">多行文本</option>
+      <option value="money">金额</option>
+      <option value="date">日期</option>
+      <option value="select">下拉选择</option>
+    </select>
+    <label>写入位置</label>
+    <div class="cf-radios">
+      <label><input type="radio" name="cfTarget" value="append" checked> 追加到文末「补充条款」表格</label>
+      <label><input type="radio" name="cfTarget" value="placeholder"> 写入模板已有占位符</label>
+    </div>
+    <div class="cf-row" id="cfPlaceholderRow" hidden>
+      <label>选择占位符</label>
+      <select id="cfPlaceholder"></select>
+      <div class="cf-hint" id="cfPlaceholderHint"></div>
+    </div>
+    <div class="cf-row" id="cfOptionsRow" hidden>
+      <label>候选值（每行一个）</label>
+      <textarea id="cfOptions" rows="2" placeholder="每行填一个选项"></textarea>
+    </div>
+    <div class="cf-hint">自定义字段是人工输入，不会写入原文证据，也不会被标成「已抽取」。</div>
+    <div class="dlg-foot">
+      <button class="btn" id="cfCancel">取消</button>
+      <button class="btn primary" id="cfSave">保存</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dlgConfirm">
+  <div class="dlg-body">
+    <h3>删除自定义字段</h3>
+    <p id="confirmText" style="font-size:13px;color:var(--muted);line-height:1.7;margin:0"></p>
+    <div class="dlg-foot">
+      <button class="btn" id="confirmCancel">取消</button>
+      <button class="btn primary" id="confirmOk">删除</button>
+    </div>
+  </div>
+</dialog>
+
 <script src="/assets/shell.js"></script>
+<script src="/assets/preview.js"></script>
 <script>
 (function () {
   "use strict";
@@ -266,6 +455,23 @@
   var suggestions = {};    // key -> { value, reason, source: 'llm_suggest' }（AI 起草的建议值）
   var filter = "all";
   var activeGroup = "";    // 当前显示的分组 key（分组切换视图）
+
+  var templatesList = [];  // 模板库列表
+  var templateId = "";     // 当前选用的模板
+  var unmapped = [];       // 当前模板里没有对应字段的占位符
+  var customFields = [];   // 用户自定义字段（本地暂存 + 提交给后端）
+  var editingCustomKey = "";
+  var pendingDeleteKey = "";
+  var previewOpen = false;
+  var previewTimer = null;
+  var previewSeq = 0;
+  var CUSTOM_GROUP = "custom";
+
+  // 项目类型：三个维度由用户先选定，后端据此下发字段集
+  var scopeState = { method: "", category: "", org_form: "" };
+  var scopeAxes = { method: [], category: [], org_form: [] };
+  var scopeData = null;
+  var SCOPE_IDS = { method: "scopeMethod", category: "scopeCategory", org_form: "scopeOrgForm" };
 
   // 清单类只读字段：template 为空，但内容对填写有参考价值，按明细列表展示
   var READONLY_LISTS = {
@@ -289,6 +495,220 @@
     return String(text == null ? "" : text)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  // 自定义字段按任务隔离，避免不同任务之间串数据
+  function customStoreKey() { return "tender.customFields." + jobId; }
+  function templateStoreKey() { return "tender.templateId." + jobId; }
+
+  function loadCustom() {
+    try {
+      var raw = JSON.parse(localStorage.getItem(customStoreKey()) || "[]");
+      if (!Array.isArray(raw)) return [];
+      return raw.filter(function (cf) {
+        return cf && typeof cf === "object" && cf.key && cf.label;
+      }).map(function (cf) {
+        return {
+          key: String(cf.key),
+          label: String(cf.label),
+          value: String(cf.value == null ? "" : cf.value),
+          type: String(cf.type || "text"),
+          target: cf.target === "placeholder" ? "placeholder" : "append",
+          placeholder: String(cf.placeholder || ""),
+          options: Array.isArray(cf.options) ? cf.options.map(String) : [],
+          created_at: String(cf.created_at || "")
+        };
+      });
+    } catch (e) { return []; }
+  }
+
+  function saveCustom() {
+    // 类型专属字段由后端配置生成，不落本地，避免切换类型后残留旧字段
+    var stored = customFields.filter(function (cf) { return !cf.scope; });
+    try { localStorage.setItem(customStoreKey(), JSON.stringify(stored)); }
+    catch (e) { /* 隐私模式下写不进 localStorage 也不该打断填写 */ }
+  }
+
+  function customValue(cf) {
+    var st = state[cf.key];
+    return st ? String(st.value || "") : String(cf.value || "");
+  }
+
+  function currentCustomFields() {
+    return customFields.map(function (cf) {
+      return {
+        key: cf.key, label: cf.label, value: customValue(cf),
+        target: cf.target, placeholder: cf.placeholder
+      };
+    });
+  }
+
+  function toCustomItem(cf) {
+    // template 留空：绑定类字段只通过 custom_fields 提交，避免和 values 互相覆盖
+    return {
+      key: cf.key, label: cf.label, template: "",
+      value: customValue(cf), custom: true, cf: cf,
+      status: "ok", confidence: 1
+    };
+  }
+
+  function syncCustomGroup() {
+    var idx = -1;
+    for (var i = 0; i < groupsData.length; i += 1) {
+      if (groupsData[i].key === CUSTOM_GROUP) { idx = i; break; }
+    }
+    var items = customFields.map(toCustomItem);
+    if (idx >= 0) {
+      if (items.length) groupsData[idx].items = items;
+      else groupsData.splice(idx, 1);
+    } else if (items.length) {
+      groupsData.push({ key: CUSTOM_GROUP, label: "自定义字段", items: items });
+    }
+    if (activeGroup === CUSTOM_GROUP && !items.length) {
+      activeGroup = groupsData.length ? groupsData[0].key : "";
+    }
+  }
+
+  /* ---------------------------------------------------------- 项目类型 -- */
+
+  function scopeStoreKey() { return "tender.scope." + jobId; }
+
+  function loadScope() {
+    try {
+      var saved = JSON.parse(localStorage.getItem(scopeStoreKey()) || "{}");
+      Object.keys(SCOPE_IDS).forEach(function (axis) {
+        if (saved && typeof saved[axis] === "string") scopeState[axis] = saved[axis];
+      });
+    } catch (e) { /* 隐私模式下读不到，按未选择处理 */ }
+  }
+
+  function saveScope() {
+    try { localStorage.setItem(scopeStoreKey(), JSON.stringify(scopeState)); }
+    catch (e) { /* 写不进不影响本次填写 */ }
+  }
+
+  function scopeComplete() {
+    return !!(scopeState.method && scopeState.category && scopeState.org_form);
+  }
+
+  function axisLabel(axis, code) {
+    var hit = (scopeAxes[axis] || []).filter(function (o) { return o.code === code; })[0];
+    return hit ? hit.label : code;
+  }
+
+  function renderScopeBar() {
+    Object.keys(SCOPE_IDS).forEach(function (axis) {
+      var el = $(SCOPE_IDS[axis]);
+      var options = scopeAxes[axis] || [];
+      el.innerHTML = '<option value="">请选择</option>' + options.map(function (o) {
+        return '<option value="' + esc(o.code) + '">' + esc(o.label) + "</option>";
+      }).join("");
+      el.value = scopeState[axis] || "";
+    });
+    if (!scopeComplete()) {
+      $("scopeSummary").textContent = "先选好三项类型，再开始填写对应字段。";
+      return;
+    }
+    var labels = Object.keys(SCOPE_IDS).map(function (axis) {
+      return axisLabel(axis, scopeState[axis]);
+    });
+    var extra = ((scopeData && scopeData.extra_fields) || []).length;
+    var na = scopeData ? Object.keys(scopeData.na || {}).length : 0;
+    $("scopeSummary").innerHTML = "当前：<b>" + esc(labels.join(" · ")) + "</b>" +
+      "　类型专属字段 " + extra + " 项 · 不适用 " + na + " 项";
+  }
+
+  function scopeNotice(msg, kind) {
+    var el = $("scopeNotice");
+    if (!msg) { el.className = "notice hidden"; el.textContent = ""; return; }
+    el.className = "notice" + (kind ? " " + kind : "");
+    el.textContent = msg;
+  }
+
+  function renderScopeHints(data) {
+    var scope = data.scope || {};
+    var msgs = (scope.conflicts || []).slice();
+    var hint = scope.template_hint;
+    if (hint && !hint.matched && hint.note) msgs.push(hint.note);
+    scopeNotice(msgs.join("  "), msgs.length ? "warn" : "");
+    // 只推荐不自动切换：模板可能是用户手选的
+    var actions = "";
+    if (hint && hint.matched && hint.id && hint.id !== templateId) {
+      actions = '<button class="btn small" data-use-tpl="' + esc(hint.id) + '">' +
+        "使用「" + esc(hint.name) + "」</button>";
+    }
+    $("scopeActions").innerHTML = actions;
+  }
+
+  function syncScopeFields(extra) {
+    // 类型专属字段不写进 localStorage，每次按后端配置重建，避免旧类型残留；
+    // 用户在这些字段里填的值留在 state，切回同一类型时会自动回来。
+    customFields = customFields.filter(function (cf) { return !cf.scope; });
+    (extra || []).forEach(function (f) {
+      customFields.push({
+        key: "scope:" + f.key,
+        label: f.label,
+        value: "",
+        type: f.field_type || "text",
+        target: "append",
+        placeholder: "",
+        options: f.options || [],
+        hint: f.hint || "",
+        scope: true
+      });
+    });
+    syncCustomGroup();
+  }
+
+  async function applyScope() {
+    if (!scopeComplete()) {
+      groupsData = [];
+      syncScopeFields([]);
+      scopeNotice("");
+      $("scopeActions").innerHTML = "";
+      $("scopeGate").hidden = false;
+      $("app").classList.add("hidden");
+      renderScopeBar();
+      return;
+    }
+    $("scopeGate").hidden = true;
+    var url = "/api/jobs/" + jobId + "/fields?template_id=" + encodeURIComponent(templateId) +
+      "&method=" + encodeURIComponent(scopeState.method) +
+      "&category=" + encodeURIComponent(scopeState.category) +
+      "&org_form=" + encodeURIComponent(scopeState.org_form);
+    try {
+      var res = await fetch(url);
+      var data = await res.json();
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      // 只替换字段元数据，state 里已经填过的值一律保留
+      groupsData = data.groups || [];
+      unmapped = data.unmapped_placeholders || [];
+      scopeData = data.scope || null;
+      scopeAxes = (scopeData && scopeData.axes) || scopeAxes;
+      syncScopeFields(scopeData ? scopeData.extra_fields : []);
+      if (!groupsData.some(function (g) { return g.key === activeGroup; })) {
+        activeGroup = groupsData.length ? groupsData[0].key : "";
+      }
+      $("app").classList.remove("hidden");
+      renderScopeBar();
+      renderScopeHints(data);
+      renderNav();
+      renderActiveGroup();
+      if (previewOpen) refreshPreview();
+    } catch (err) {
+      notice("按类型加载字段失败：" + err.message, "error");
+    }
+  }
+
+  function nameExists(label, exceptKey) {
+    var name = String(label || "").trim();
+    return groupsData.some(function (g) {
+      return g.items.some(function (it) {
+        return String(it.label || "").trim() === name && it.key !== exceptKey;
+      });
+    }) || customFields.some(function (cf) {
+      return cf.key !== exceptKey && cf.label === name;
+    });
   }
 
   function notice(msg, kind) {
@@ -342,7 +762,7 @@
     var total = 0, ready = 0;
     groupsData.forEach(function (g) {
       g.items.forEach(function (item) {
-        if (!item.template || item.na) return; // 自主招标不适用字段不进统计
+        if ((!item.template && !item.custom) || item.na) return; // 清单/不适用字段不进统计
         total += 1;
         var st = state[item.key];
         var val = st ? (st.value || "") : (item.value == null ? "" : String(item.value));
@@ -362,7 +782,7 @@
   function groupStats(group) {
     var total = 0, filled = 0, missing = 0;
     group.items.forEach(function (item) {
-      if (!item.template) return;
+      if ((!item.template && !item.custom) || item.na) return;
       total += 1;
       var st = state[item.key];
       var val = st ? (st.value || "") : (item.value == null ? "" : String(item.value));
@@ -424,6 +844,7 @@
       if (READONLY_LISTS[item.key]) {
         return !!item.value;
       }
+      if (item.custom) return fieldVisible(item);
       return item.template && fieldVisible(item);
     });
     var stats = groupStats(group);
@@ -471,16 +892,18 @@
     else if (s === "conflict" || s === "invalid") cls += " conflict";
     if (st && st.mode === "accepted") cls += " accepted";
 
-    // 自主招标时代理机构字段不适用
+    // 不适用字段由后端类型规则判定，原因也一并带回来
     if (item.na) {
       return '<div class="' + cls + '" data-key="' + esc(item.key) + '" data-na="1">' +
         '<div class="field-head">' +
           '<span class="label">' + esc(item.label) + "</span>" +
           '<span class="tpl">不适用</span>' +
-          '<span class="spacer"></span><span class="tag t-mute">自主招标</span>' +
+          '<span class="spacer"></span><span class="tag t-mute">' +
+          esc(item.na_tag || "不适用") + "</span>" +
         "</div>" +
         '<input type="text" data-input value="" disabled>' +
-        '<div class="empty-hint">本项目为自主（自行）招标，无需填写代理机构信息。</div>' +
+        '<div class="empty-hint">' +
+          esc(item.na_reason || "当前项目类型下无需填写本字段。") + "</div>" +
         "</div>";
     }
 
@@ -502,19 +925,23 @@
         "</div>";
     }
 
-    // 采购标的支持多项：每行一个标的
+    // 采购标的支持多项：每行一个标的；自定义字段按用户选的类型渲染控件
     var multiTarget = item.key === "procurement_target";
-    var input = multiTarget || isLongText(value)
-      ? '<textarea data-input rows="' + (multiTarget ? 4 : 3) + '">' + esc(value) + "</textarea>"
-      : '<input type="text" data-input value="' + esc(value) + '">';
+    var input;
+    if (item.custom) {
+      input = customInputHtml(item.cf, value);
+    } else if (multiTarget || isLongText(value)) {
+      input = '<textarea data-input rows="' + (multiTarget ? 4 : 3) + '">' + esc(value) + "</textarea>";
+    } else {
+      input = '<input type="text" data-input value="' + esc(value) + '">';
+    }
 
     var targetHint = "";
     if (multiTarget) {
       targetHint = '<div class="empty-hint">可多项：每行填一个标的。</div>';
       var listField = groupsData
-        ? (groupsData.groups || []).flatMap(function (g) { return g.items; })
-          .filter(function (it) { return it.key === "procurement_target_list"; })[0]
-        : null;
+        .flatMap(function (g) { return g.items; })
+        .filter(function (it) { return it.key === "procurement_target_list"; })[0] || null;
       if (listField && listField.value) {
         targetHint += '<div class="hist-hint">已识别 ' +
           esc(listField.value.split("\n").filter(function (l) { return l.trim(); }).length) +
@@ -564,6 +991,30 @@
         '<button class="btn small" data-act="use-sugg">采纳建议</button></div>';
     }
 
+    if (item.custom) {
+      var isScope = !!item.cf.scope;
+      var where = item.cf.target === "placeholder"
+        ? "占位符：" + esc(item.cf.placeholder)
+        : "追加到补充条款";
+      var scopeActions = isScope
+        ? ""
+        : '<button class="btn small ghost" data-act="cf-edit">编辑</button>' +
+          '<button class="btn small ghost danger" data-act="cf-del">删除</button>';
+      return '<div class="' + cls + ' custom" data-key="' + esc(item.key) + '" data-template="">' +
+        '<div class="field-head">' +
+          '<span class="label">' + esc(item.label) + "</span>" +
+          '<span class="cf-tag">' + (isScope ? "类型专属" : "自定义") + "</span>" +
+          '<span class="tpl">' + where + "</span>" +
+          '<span class="spacer"></span><span class="tag work">人工填写</span>' +
+        "</div>" +
+        input +
+        (isScope && item.cf.hint
+          ? '<div class="empty-hint">' + esc(item.cf.hint) + "</div>" : "") +
+        '<div class="field-actions">' + scopeActions +
+          '<span class="state" data-state>' + esc(cur) + "</span>" +
+        "</div></div>";
+    }
+
     return '<div class="' + cls + '" data-key="' + esc(item.key) + '" data-template="' + esc(item.template || "") + '">' +
       '<div class="field-head">' +
         '<span class="label">' + esc(item.label) + "</span>" + tplBadge +
@@ -604,9 +1055,11 @@
           el.classList.remove("missing");
         }
         updateProgress();
+        schedulePreview();
       });
 
-      el.querySelector('[data-act="accept"]').addEventListener("click", function () {
+      var acceptBtn = el.querySelector('[data-act="accept"]');
+      if (acceptBtn) acceptBtn.addEventListener("click", function () {
         var orig = findItem(key);
         if (!orig) return;
         var aiValue = orig.value == null ? "" : String(orig.value);
@@ -616,16 +1069,24 @@
         el.classList.add("accepted");
         syncStateLabel(el, "已采纳");
         updateProgress();
+        schedulePreview();
       });
 
-      el.querySelector('[data-act="clear"]').addEventListener("click", function () {
+      var clearBtn = el.querySelector('[data-act="clear"]');
+      if (clearBtn) clearBtn.addEventListener("click", function () {
         input.value = "";
         state[key] = { value: "", mode: "cleared" };
         el.classList.add("missing");
         el.classList.remove("accepted");
         syncStateLabel(el, "已清空");
         updateProgress();
+        schedulePreview();
       });
+
+      var cfEdit = el.querySelector('[data-act="cf-edit"]');
+      if (cfEdit) cfEdit.addEventListener("click", function () { openCustomDialog(key); });
+      var cfDel = el.querySelector('[data-act="cf-del"]');
+      if (cfDel) cfDel.addEventListener("click", function () { askDeleteCustom(key); });
 
       var histBtn = el.querySelector('[data-act="use-hist"]');
       if (histBtn) {
@@ -659,7 +1120,7 @@
       var importBtn = el.querySelector('[data-act="import-list"]');
       if (importBtn) {
         importBtn.addEventListener("click", function () {
-          var listField = (groupsData.groups || []).flatMap(function (g) { return g.items; })
+          var listField = groupsData.flatMap(function (g) { return g.items; })
             .filter(function (it) { return it.key === "procurement_target_list"; })[0];
           var raw = listField && listField.value ? String(listField.value) : "";
           var names = raw.split("\n").map(function (line) {
@@ -674,6 +1135,7 @@
           syncStateLabel(el, "已导入标的清单");
           if (importBtn.parentNode) importBtn.parentNode.remove();
           updateProgress();
+          schedulePreview();
         });
       }
     });
@@ -690,14 +1152,342 @@
   }
 
   function collectValues() {
+    // 从 state 全量取值，不从 DOM 读：工作台一次只渲染一个分组，
+    // 遍历 .field 会把其他分组里「清空 / 修改」过的值漏掉（P0）。
     var values = {};
-    document.querySelectorAll(".field").forEach(function (el) {
-      var tpl = el.dataset.template;
-      if (!tpl) return;
-      var input = el.querySelector("[data-input]");
-      values[tpl] = input ? input.value.trim() : "";
+    groupsData.forEach(function (g) {
+      g.items.forEach(function (item) {
+        var tpl = String(item.template || "").trim();
+        if (!tpl) return;
+        // 显式提交空串：后端会以抽取结果为底稿，不提交反而会把抽到的值写进成稿
+        if (item.na) { values[tpl] = ""; return; }
+        var st = state[item.key];
+        var raw = st ? st.value : (item.value == null ? "" : String(item.value));
+        values[tpl] = String(raw == null ? "" : raw).trim();
+      });
     });
     return values;
+  }
+
+  /* -------------------------------------------------------------- 模板 -- */
+
+  async function loadTemplates() {
+    try {
+      var res = await fetch("/api/templates");
+      if (!res.ok) return;
+      var data = await res.json();
+      templatesList = data.templates || [];
+      var saved = "";
+      try { saved = localStorage.getItem(templateStoreKey()) || ""; } catch (e) {}
+      if (templatesList.some(function (t) { return t.id === saved; })) {
+        templateId = saved;
+      } else {
+        var def = templatesList.filter(function (t) { return t.is_default; })[0];
+        templateId = def ? def.id : (templatesList[0] ? templatesList[0].id : "");
+      }
+      updateTemplateLine();
+    } catch (e) {
+      // 模板库不可用时留空 id，后端会回退默认模板，不影响原有填写流程
+      templateId = "";
+    }
+  }
+
+  function currentTemplate() {
+    for (var i = 0; i < templatesList.length; i += 1) {
+      if (templatesList[i].id === templateId) return templatesList[i];
+    }
+    return null;
+  }
+
+  function updateTemplateLine() {
+    var t = currentTemplate();
+    if (!t) { $("tplLine").hidden = true; return; }
+    $("tplLine").hidden = false;
+    $("tplName").textContent = t.name;
+    var bits = [];
+    if (t.placeholder_count != null) bits.push(t.placeholder_count + " 个占位符");
+    if (t.unmapped && t.unmapped.length) bits.push("未匹配 " + t.unmapped.length + " 个");
+    $("tplMeta").textContent = bits.length ? "（" + bits.join(" · ") + "）" : "";
+  }
+
+  function renderTemplatePick() {
+    if (!templatesList.length) {
+      $("tplPick").innerHTML = '<div class="empty">模板库为空，请先到「模板库」上传一套。</div>';
+      return;
+    }
+    $("tplPick").innerHTML = templatesList.map(function (t) {
+      var on = t.id === templateId;
+      return '<div class="item">' +
+        '<span class="nm">' + esc(t.name) + "</span>" +
+        (t.is_default ? '<span class="tag ok">默认</span>' : "") +
+        (t.unmapped && t.unmapped.length
+          ? '<span class="tag low">未匹配 ' + t.unmapped.length + "</span>" : "") +
+        '<div class="spacer"></div>' +
+        '<button class="btn small' + (on ? " primary" : "") + '" data-pick="' + esc(t.id) + '"' +
+        (on ? " disabled" : "") + ">" + (on ? "使用中" : "使用") + "</button>" +
+        "</div>";
+    }).join("");
+  }
+
+  async function reloadFieldsMeta() {
+    // 只刷新模板体检信息，不重置 groupsData / state，避免丢掉用户已填的值
+    try {
+      var res = await fetch("/api/jobs/" + jobId + "/fields?template_id=" + encodeURIComponent(templateId));
+      if (!res.ok) throw new Error("读取模板信息失败");
+      var data = await res.json();
+      unmapped = data.unmapped_placeholders || [];
+    } catch (e) { unmapped = []; }
+  }
+
+  async function pickTemplate(id) {
+    templateId = id;
+    try { localStorage.setItem(templateStoreKey(), id); } catch (e) {}
+    updateTemplateLine();
+    renderTemplatePick();
+    $("dlgTemplate").close();
+    await reloadFieldsMeta();
+    // 已绑定到一个不再存在的占位符的字段，退回「追加到文末」，避免生成时丢失
+    customFields.forEach(function (cf) {
+      if (cf.target === "placeholder" && cf.placeholder &&
+          unmapped.indexOf(cf.placeholder) < 0 &&
+          !currentTemplateHas(cf.placeholder)) {
+        cf.target = "append";
+        cf.placeholder = "";
+      }
+    });
+    saveCustom();
+    syncCustomGroup();
+    var t = currentTemplate();
+    if (t && t.unmapped && t.unmapped.length) {
+      notice("已切换到「" + t.name + "」，该模板有 " + t.unmapped.length +
+        " 个占位符没有对应字段，生成的文档会显示「待补充」。可用「＋ 自定义字段」绑定。", "warn");
+    } else {
+      notice("");
+    }
+    renderTemplatePick();
+    renderNav();
+    renderActiveGroup();
+    refreshPreview();
+  }
+
+  function currentTemplateHas(name) {
+    var t = currentTemplate();
+    return !!(t && (t.placeholders || []).indexOf(name) >= 0);
+  }
+
+  /* -------------------------------------------------------------- 预览 -- */
+
+  var lastPreview = null;
+
+  function setPreviewOpen(on) {
+    previewOpen = on;
+    $("previewPane").hidden = !on;
+    $("app").classList.toggle("with-preview", on);
+    $("btnPreview").textContent = on ? "关闭预览" : "预览";
+    if (on) refreshPreview();
+  }
+
+  function schedulePreview() {
+    if (!previewOpen) return;
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(refreshPreview, 800);
+  }
+
+  async function refreshPreview() {
+    if (!previewOpen) return;
+    var seq = ++previewSeq;
+    $("pvLoading").classList.remove("hidden");
+    try {
+      var res = await fetch("/api/jobs/" + jobId + "/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          template_id: templateId,
+          values: collectValues(),
+          missing_mode: $("missingMode").value,
+          custom_fields: currentCustomFields()
+        })
+      });
+      var data = await res.json().catch(function () { return {}; });
+      if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+      if (seq !== previewSeq) return; // 丢弃过期响应
+      lastPreview = data;
+      renderPreview();
+    } catch (err) {
+      if (seq !== previewSeq) return;
+      $("paper").innerHTML = '<p class="pv-body">预览失败：' + esc(err.message) + "</p>";
+      $("pvStats").textContent = "—";
+    } finally {
+      if (seq === previewSeq) $("pvLoading").classList.add("hidden");
+    }
+  }
+
+  function renderPreview() {
+    if (!lastPreview) return;
+    var s = lastPreview.stats || {};
+    $("pvStats").innerHTML = "已填 " + (s.filled || 0) + " / " +
+      (s.total_placeholders || 0) + " · <b>待补充 " + (s.missing || 0) + "</b>";
+    var sections = $("pvOnlyMissing").checked
+      ? window.TenderPreview.onlyMissing(lastPreview.sections)
+      : (lastPreview.sections || []);
+    $("paper").innerHTML = window.TenderPreview.render(sections) ||
+      '<p class="pv-body">当前筛选下没有内容。</p>';
+  }
+
+  function locateField(name) {
+    if (!name) return;
+    var foundGroup = null, foundItem = null;
+    groupsData.forEach(function (g) {
+      g.items.forEach(function (it) {
+        if (foundItem) return;
+        if (String(it.template || "").trim() === name ||
+            (it.custom && it.cf && it.cf.placeholder === name)) {
+          foundGroup = g; foundItem = it;
+        }
+      });
+    });
+    if (!foundItem) {
+      toast("「" + name + "」没有对应字段，可用「＋ 自定义字段」绑定该占位符");
+      return;
+    }
+    if (activeGroup !== foundGroup.key) setActiveGroup(foundGroup.key);
+    setTimeout(function () {
+      var el = null;
+      document.querySelectorAll(".field[data-key]").forEach(function (node) {
+        if (node.dataset.key === foundItem.key) el = node;
+      });
+      if (!el) return;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.classList.remove("flash");
+      void el.offsetWidth;
+      el.classList.add("flash");
+    }, 90);
+  }
+
+  /* ------------------------------------------------------ 自定义字段 -- */
+
+  function customInputHtml(cf, value) {
+    var v = esc(value);
+    if (cf.type === "long_text") return '<textarea data-input rows="4">' + v + "</textarea>";
+    if (cf.type === "date") return '<input type="date" data-input value="' + v + '">';
+    if (cf.type === "select" && cf.options && cf.options.length) {
+      var opts = ['<option value="">请选择</option>'].concat(
+        cf.options.map(function (o) {
+          return '<option value="' + esc(o) + '"' + (o === value ? " selected" : "") +
+            ">" + esc(o) + "</option>";
+        })
+      ).join("");
+      return '<select data-input>' + opts + "</select>";
+    }
+    return '<input type="text" data-input value="' + v + '">';
+  }
+
+  function updatePlaceholderOptions() {
+    var sel = $("cfPlaceholder");
+    var used = {};
+    customFields.forEach(function (cf) {
+      if (cf.key !== editingCustomKey && cf.placeholder) used[cf.placeholder] = true;
+    });
+    var options = unmapped.filter(function (name) { return !used[name]; });
+    var cur = editingCustomKey
+      ? customFields.filter(function (c) { return c.key === editingCustomKey; })[0]
+      : null;
+    if (cur && cur.placeholder && options.indexOf(cur.placeholder) < 0) {
+      options.unshift(cur.placeholder);
+    }
+    sel.innerHTML = options.length
+      ? options.map(function (name) {
+          return '<option value="' + esc(name) + '">' + esc(name) + "</option>";
+        }).join("")
+      : '<option value="">（没有可绑定的占位符）</option>';
+    if (cur && cur.placeholder) sel.value = cur.placeholder;
+    $("cfPlaceholderHint").textContent = options.length
+      ? "来自当前模板的未匹配占位符；写入后会替换模板里 {占位符} 的位置。"
+      : "当前模板的占位符都已匹配字段，或已被其他自定义字段占用。";
+    return options.length;
+  }
+
+  function syncCustomDialogRows() {
+    var target = document.querySelector('input[name="cfTarget"]:checked').value;
+    $("cfPlaceholderRow").hidden = target !== "placeholder";
+    $("cfOptionsRow").hidden = $("cfType").value !== "select";
+    if (target === "placeholder") updatePlaceholderOptions();
+  }
+
+  function openCustomDialog(key) {
+    editingCustomKey = key || "";
+    var cf = key ? customFields.filter(function (c) { return c.key === key; })[0] : null;
+    $("cfTitle").textContent = cf ? "编辑自定义字段" : "添加自定义字段";
+    $("cfLabel").value = cf ? cf.label : "";
+    $("cfValue").value = cf ? customValue(cf) : "";
+    $("cfType").value = cf ? cf.type : "text";
+    $("cfOptions").value = cf && cf.options ? cf.options.join("\n") : "";
+    var radio = document.querySelector(
+      'input[name="cfTarget"][value="' + (cf ? cf.target : "append") + '"]'
+    );
+    if (radio) radio.checked = true;
+    syncCustomDialogRows();
+    $("dlgCustom").showModal();
+  }
+
+  function saveCustomDialog() {
+    var label = $("cfLabel").value.trim();
+    if (!label) { toast("请填写字段名"); return; }
+    if (nameExists(label, editingCustomKey)) { toast("已有同名字段，请换一个名称"); return; }
+    var type = $("cfType").value;
+    var value = $("cfValue").value;
+    if (type === "money" && value.trim() && !/^[\d,]+(\.\d+)?$/.test(value.trim())) {
+      toast("金额只能填数字、千分位逗号和小数点"); return;
+    }
+    var target = document.querySelector('input[name="cfTarget"]:checked').value;
+    var placeholder = target === "placeholder" ? $("cfPlaceholder").value : "";
+    if (target === "placeholder" && !placeholder) { toast("请选择要写入的占位符"); return; }
+    var options = $("cfOptions").value.split("\n")
+      .map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+
+    if (editingCustomKey) {
+      customFields.forEach(function (cf) {
+        if (cf.key !== editingCustomKey) return;
+        cf.label = label; cf.value = value; cf.type = type;
+        cf.target = target; cf.placeholder = placeholder; cf.options = options;
+      });
+      delete state[editingCustomKey];
+    } else {
+      customFields.push({
+        key: "cf_" + Date.now() + "_" + Math.floor(Math.random() * 1000),
+        label: label, value: value, type: type,
+        target: target, placeholder: placeholder, options: options,
+        created_at: new Date().toISOString()
+      });
+    }
+    saveCustom();
+    syncCustomGroup();
+    renderNav();
+    renderActiveGroup();
+    schedulePreview();
+    $("dlgCustom").close();
+    toast(editingCustomKey ? "已更新自定义字段" : "已添加自定义字段");
+  }
+
+  function askDeleteCustom(key) {
+    pendingDeleteKey = key;
+    var cf = customFields.filter(function (c) { return c.key === key; })[0];
+    $("confirmText").textContent = "确定删除「" + (cf ? cf.label : "") +
+      "」吗？删除后生成的招标文件里不再包含这项。";
+    $("dlgConfirm").showModal();
+  }
+
+  function deleteCustom() {
+    customFields = customFields.filter(function (cf) { return cf.key !== pendingDeleteKey; });
+    delete state[pendingDeleteKey];
+    pendingDeleteKey = "";
+    saveCustom();
+    syncCustomGroup();
+    renderNav();
+    renderActiveGroup();
+    schedulePreview();
+    $("dlgConfirm").close();
+    toast("已删除自定义字段");
   }
 
   async function generate() {
@@ -714,7 +1504,9 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           values: values,
-          missing_mode: $("missingMode").value
+          missing_mode: $("missingMode").value,
+          template_id: templateId,
+          custom_fields: currentCustomFields()
         })
       });
       if (!res.ok) {
@@ -758,25 +1550,27 @@
         return;
       }
 
-      var res = await fetch("/api/jobs/" + jobId + "/fields");
+      await loadTemplates();
+
+      // 先不带类型参数拉一次：只取下拉选项与从原文推断的初值，不渲染字段
+      var res = await fetch("/api/jobs/" + jobId + "/fields?template_id=" + encodeURIComponent(templateId));
       if (!res.ok) throw new Error("读取字段失败");
-      var data = await res.json();
-      groupsData = data.groups || [];
-      if (groupsData.length && !activeGroup) activeGroup = groupsData[0].key;
+      var meta = await res.json();
+      scopeAxes = (meta.scope && meta.scope.axes) || scopeAxes;
+      var suggested = (meta.scope && meta.scope.suggested) || {};
+      loadScope();
+      Object.keys(SCOPE_IDS).forEach(function (axis) {
+        if (!scopeState[axis] && suggested[axis]) scopeState[axis] = suggested[axis];
+      });
+      customFields = loadCustom();
 
       $("loading").classList.add("hidden");
-      $("app").classList.remove("hidden");
-      renderNav();
-      renderActiveGroup();
+      updateTemplateLine();
+      renderScopeBar();
+      notice("已读取抽取结果。请先确认上方三项项目类型，字段区会按所选类型加载。");
 
-      var msg = data.missing
-        ? "已抽取 " + (data.total - data.missing) + " / " + data.total + " 个字段，其余 " +
-          data.missing + " 项待手动补充。"
-        : "全部 " + data.total + " 个字段已抽取，请逐项核对。";
-      if (data.history_count) {
-        msg += " 另有 " + data.history_count + " 项可复用你以前填过的值（绿色提示条点「采用」即填）。";
-      }
-      notice(msg);
+      // 选齐三项才拉对应字段集；没选齐时显示 gate，不套用任何过滤口径
+      await applyScope();
     } catch (err) {
       $("loading").classList.add("hidden");
       notice("加载失败：" + err.message, "error");
@@ -801,6 +1595,7 @@
     });
     renderNav();
     renderActiveGroup();
+    schedulePreview();
     toast("已采纳全部 AI 抽取值");
   });
 
@@ -832,6 +1627,57 @@
         btn.disabled = false;
         btn.textContent = "AI 起草缺失字段";
       });
+  });
+
+  /* ------------------------------------------------------------ 事件 -- */
+
+  $("btnPreview").addEventListener("click", function () { setPreviewOpen(!previewOpen); });
+  $("btnClosePreview").addEventListener("click", function () { setPreviewOpen(false); });
+  $("btnRefreshPreview").addEventListener("click", refreshPreview);
+  $("btnGenerate2").addEventListener("click", generate);
+  $("pvOnlyMissing").addEventListener("change", renderPreview);
+  $("missingMode").addEventListener("change", schedulePreview);
+  $("paper").addEventListener("click", function (ev) {
+    var seg = ev.target.closest("[data-pname]");
+    if (seg) locateField(seg.dataset.pname);
+  });
+
+  $("btnPickTemplate").addEventListener("click", function () {
+    renderTemplatePick();
+    $("dlgTemplate").showModal();
+  });
+  $("tplPick").addEventListener("click", function (ev) {
+    var btn = ev.target.closest("button[data-pick]");
+    if (btn) pickTemplate(btn.dataset.pick);
+  });
+  $("tpClose").addEventListener("click", function () { $("dlgTemplate").close(); });
+
+  $("btnAddCustom").addEventListener("click", function () { openCustomDialog(""); });
+  $("cfCancel").addEventListener("click", function () { $("dlgCustom").close(); });
+  $("cfSave").addEventListener("click", saveCustomDialog);
+  $("dlgCustom").querySelectorAll('input[name="cfTarget"]').forEach(function (radio) {
+    radio.addEventListener("change", syncCustomDialogRows);
+  });
+  $("cfType").addEventListener("change", syncCustomDialogRows);
+  $("confirmCancel").addEventListener("click", function () {
+    pendingDeleteKey = "";
+    $("dlgConfirm").close();
+  });
+  $("confirmOk").addEventListener("click", deleteCustom);
+
+  Object.keys(SCOPE_IDS).forEach(function (axis) {
+    $(SCOPE_IDS[axis]).addEventListener("change", function () {
+      scopeState[axis] = this.value;
+      saveScope();
+      applyScope();
+    });
+  });
+  $("scopeActions").addEventListener("click", function (ev) {
+    var btn = ev.target.closest("button[data-use-tpl]");
+    if (!btn) return;
+    pickTemplate(btn.dataset.useTpl).then(function () {
+      renderScopeHints({ scope: scopeData });
+    });
   });
 
   load();

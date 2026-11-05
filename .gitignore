@@ -27,6 +27,9 @@ env/
 .env.*
 settings.local.json
 
+# 本地 Agent 授权约定（仅本机，禁止提交 / 推送）
+AGENTS.local.md
+
 # 编辑器与系统文件
 .vscode/
 .idea/
