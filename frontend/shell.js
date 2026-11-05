@@ -2,7 +2,7 @@
    shell.js · 全站左侧栏（零依赖）
 
    为什么用脚本注入而不是每个页面复制一份：
-   6 个页面共用同一套导航与品牌区，复制会立刻产生漂移；而本项目的约束是
+   全站页面共用同一套导航与品牌区，复制会立刻产生漂移；而本项目的约束是
    不引入构建工具，所以用一段浏览器端小脚本统一渲染，各页面只需
    <div class="shell"><main class="main">…</main></div> 骨架。
    导航是原生 <a>，脚本失败时页面内容仍完整可读。
@@ -17,12 +17,14 @@
     projects: '<rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/>',
     company: '<path d="M3 21h18"/><path d="M5 21V6.5L12 3l7 3.5V21"/><path d="M9.5 21v-6h5v6"/>',
     settings: '<path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2.2"/><circle cx="15" cy="12" r="2.2"/><circle cx="9" cy="17" r="2.2"/>',
+    templates: '<rect x="4" y="3" width="12" height="16" rx="1.6"/><path d="M8 19h10a2 2 0 0 0 2-2V7"/><path d="M7.5 8h5M7.5 12h5"/>',
     shield: '<path d="M12 3l7 3v5.5c0 4.2-2.9 7.6-7 9.5-4.1-1.9-7-5.3-7-9.5V6z"/>'
   };
 
   var ITEMS = [
     { href: "/", label: "需求解析", icon: "parse" },
     { href: "/fill", label: "填写工作台", icon: "fill" },
+    { href: "/templates", label: "模板库", icon: "templates" },
     { href: "/compare", label: "文档比对", icon: "compare" },
     { href: "/projects", label: "项目工作台", icon: "projects" },
     { href: "/company", label: "企业档案", icon: "company" },

@@ -39,13 +39,16 @@ from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
 from .doc_generator import generate_tender_document
+from .field_scopes import axis_options, resolve
 from .llm_client import build_llm_client
 from .models import extraction_result_from_dict
 from .paths import app_data_dir, database_path
 from .pipeline import Extractor
 from .platform_adapter import PlatformRecognitionError, to_platform_draft
+from .preview import build_preview
 from .report import render_markdown
 from .storage import Database
+from .template_library import TemplateLibrary
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent.parent
@@ -94,6 +97,36 @@ def default_company_profile() -> dict[str, Any]:
         "statements": {},
         "evidence_index": {},
     }
+
+
+_METHOD_HINTS: tuple[tuple[str, str], ...] = (
+    ("竞争性磋商", "negotiation"),
+    ("竞争性谈判", "competitive"),
+    ("单一来源", "single"),
+    ("询价", "inquiry"),
+    ("邀请招标", "invite"),
+    ("公开招标", "open"),
+)
+
+
+def _field_text(raw_fields: dict[str, Any], key: str) -> str:
+    """抽取结果里取一个字段值；字段缺失或形状异常时返回空串。"""
+    item = raw_fields.get(key)
+    return str(item.get("value") or "") if isinstance(item, dict) else ""
+
+
+def _suggested_scope(raw_fields: dict[str, Any]) -> dict[str, str]:
+    """从原文推断下拉框初值；业务类型原文通常不写，留空要求用户明确选择。"""
+    method_text = _field_text(raw_fields, "procurement_method")
+    org_text = _field_text(raw_fields, "tender_org_form")
+    method = next((code for word, code in _METHOD_HINTS if word in method_text), "")
+    if any(word in org_text for word in ("自行", "自主", "本单位", "自己")):
+        org_form = "self"
+    elif any(word in org_text for word in ("委托", "代理", "中介")):
+        org_form = "entrusted"
+    else:
+        org_form = ""
+    return {"method": method, "category": "", "org_form": org_form}
 
 
 def _str_map(value: Any, fields: tuple[str, ...]) -> dict[str, Any]:
@@ -414,11 +447,13 @@ class Service:
         self,
         output_dir: Path | None = None,
         db: Database | None = None,
+        templates: TemplateLibrary | None = None,
     ) -> None:
         self.jobs: dict[str, Job | CompareJob] = {}
         self.lock = threading.Lock()
         self.tmp_dir = Path(tempfile.mkdtemp(prefix="tender-web-"))
         self.db = db or Database(database_path())
+        self.templates = templates or TemplateLibrary()
         self._output_dir = output_dir
         self._settings: dict[str, Any] | None = None
         self._health: dict[str, Any] | None = None
@@ -471,6 +506,90 @@ class Service:
 
     def projects(self) -> Database:
         return self.db
+
+    # ------------------------------------------------------------------
+    # 模板库
+    # ------------------------------------------------------------------
+
+    def list_templates(self) -> list[dict[str, Any]]:
+        """模板列表：内置（只读）+ 用户上传，各自标注是否默认。"""
+        return [info.public() for info in self.templates.list()]
+
+    def get_template(self, template_id: str) -> dict[str, Any] | None:
+        info = self.templates.get(template_id)
+        return info.public() if info else None
+
+    def create_template(
+        self, filename: str, payload: bytes, **meta: Any
+    ) -> dict[str, Any]:
+        return self.templates.create(filename, payload, **meta).public()
+
+    def rename_template(self, template_id: str, name: str) -> dict[str, Any]:
+        return self.templates.rename(template_id, name).public()
+
+    def set_default_template(self, template_id: str) -> dict[str, Any]:
+        return self.templates.set_default(template_id).public()
+
+    def delete_template(self, template_id: str) -> None:
+        self.templates.delete(template_id)
+
+    @staticmethod
+    def normalize_custom_fields(raw: Any) -> list[dict[str, Any]]:
+        """自定义字段只留白名单键，避免任意结构透传给生成器。"""
+        if not isinstance(raw, list):
+            return []
+        items: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or "").strip()
+            if not label:
+                continue
+            target = str(item.get("target") or "append")
+            if target not in {"append", "placeholder"}:
+                target = "append"
+            items.append(
+                {
+                    "key": str(item.get("key") or ""),
+                    "label": label[:60],
+                    "value": str(item.get("value") or ""),
+                    "target": target,
+                    "placeholder": str(item.get("placeholder") or "").strip(),
+                }
+            )
+        return items
+
+    def preview_job(
+        self, job: Job | CompareJob, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """按当前填写值生成预览结构（不落盘、不写库）。"""
+        if isinstance(job, CompareJob):
+            raise ValueError("比对任务不支持预览招标文件")
+        template_id = str(payload.get("template_id") or "").strip()
+        values = payload.get("values") or {}
+        if not isinstance(values, dict):
+            raise ValueError("values 必须是对象")
+        missing_mode = str(payload.get("missing_mode") or "mark")
+        if missing_mode not in {"mark", "empty"}:
+            raise ValueError("missing_mode 只能是 mark 或 empty")
+
+        template = self.templates.compiled_path(template_id)
+        preview = build_preview(
+            template,
+            {str(key): value for key, value in values.items()},
+            missing_mode,
+            self.normalize_custom_fields(payload.get("custom_fields")),
+        )
+        preview["template"] = self.template_brief(template_id, template)
+        return preview
+
+    def template_brief(self, template_id: str, path: Path) -> dict[str, Any]:
+        info = self.templates.get(template_id or "") or self.templates.get(
+            self.templates.effective_default() or ""
+        )
+        if info is None:
+            return {"id": "", "name": path.stem}
+        return {"id": info.id, "name": info.name}
 
     def health(self) -> dict[str, Any]:
         now = time.time()
@@ -525,28 +644,61 @@ class Service:
                 self._groups = []
         return self._groups
 
-    def job_fields(self, job: Job) -> dict[str, Any] | None:
+    def job_fields(
+        self,
+        job: Job,
+        template_id: str | None = None,
+        *,
+        method: str = "",
+        category: str = "",
+        org_form: str = "",
+    ) -> dict[str, Any] | None:
         """按分组整理抽取结果，供「AI 建议 + 人工拍板」工作台使用。
 
         缺失字段会附带 history（历史确认值），这是「字段资产复利」的入口：
         本项目或上一个项目填过的采购人、代理机构、合同份数等，直接提示复用。
+
+        同时回传当前模板的「未匹配占位符」：填写页拿它做自定义字段的
+        「写入已有占位符」下拉框，避免用户手敲占位符名。
+
+        ``method/category/org_form`` 由填写工作台的类型选择传入。不带这组参数时
+        保持旧行为（只从原文推断组织形式），避免旧页面与既有回归用例的字段集
+        在用户还没做选择时就被悄悄改掉。
         """
         if isinstance(job, CompareJob) or job.result is None:
             return None
         raw_fields = job.result.get("fields") or {}
         history = self.db.latest_field_values()
 
-        # 自主（自行）招标时代理机构整组字段不适用，不计入缺失、不需填写
-        org_form_value = ""
-        org_field = raw_fields.get("tender_org_form")
-        if isinstance(org_field, dict):
-            org_form_value = str(org_field.get("value") or "")
-        is_self_org = any(word in org_form_value for word in ("自行", "自主", "本单位", "自己"))
-        na_keys = (
-            {"agency", "agency_address", "agency_contact",
-             "agency_project_contact", "agency_project_phone", "agency_fee"}
-            if is_self_org else set()
+        org_form_value = _field_text(raw_fields, "tender_org_form")
+        scope = resolve(
+            method,
+            category,
+            org_form,
+            price_method=_field_text(raw_fields, "price_method"),
+            agency=_field_text(raw_fields, "agency"),
         )
+        suggested = _suggested_scope(raw_fields)
+
+        if scope.complete:
+            na_keys = set(scope.na)
+            na_tags = dict(scope.na_tags)
+            na_reasons = dict(scope.na)
+        else:
+            # 旧行为：自主（自行）招标时代理机构整组字段不适用
+            is_self_org = any(
+                word in org_form_value for word in ("自行", "自主", "本单位", "自己")
+            )
+            na_keys = (
+                {"agency", "agency_address", "agency_contact",
+                 "agency_project_contact", "agency_project_phone", "agency_fee"}
+                if is_self_org else set()
+            )
+            na_tags = {key: "自主招标" for key in na_keys}
+            na_reasons = {
+                key: "自主（自行）招标由采购人自行组织，无需填写代理机构信息。"
+                for key in na_keys
+            }
 
         groups: list[dict[str, Any]] = []
         total = 0
@@ -561,7 +713,8 @@ class Service:
                     continue
                 item = {
                     "key": data.get("key", key),
-                    "label": data.get("label", key),
+                    # 标签覆写只改显示名，占位符与字段 key 不变，生成链路不受影响
+                    "label": scope.labels.get(key, data.get("label", key)),
                     "template": (data.get("template") or "").strip(),
                     "value": data.get("value"),
                     "confidence": data.get("confidence", 0.0),
@@ -576,6 +729,8 @@ class Service:
                     "notes": data.get("notes") or "",
                     "history": None,
                     "na": key in na_keys,
+                    "na_reason": na_reasons.get(key, ""),
+                    "na_tag": na_tags.get(key, "不适用"),
                 }
                 if key in na_keys:
                     na_count += 1
@@ -601,6 +756,27 @@ class Service:
                 groups.append(
                     {"key": group["key"], "label": group["label"], "items": items}
                 )
+        info = self.templates.get(template_id or "") or self.templates.get(
+            self.templates.effective_default() or ""
+        )
+
+        # 只推荐、不切换：模板是用户可能手选过的，静默改掉会让成稿版式出乎意料
+        template_hint: dict[str, Any] | None = None
+        if scope.complete:
+            matches = [
+                item for item in self.templates.list()
+                if item.category == scope.category and item.method == scope.method
+            ]
+            template_hint = (
+                {"matched": True, "id": matches[0].id, "name": matches[0].name, "note": ""}
+                if matches else
+                {
+                    "matched": False,
+                    "id": None,
+                    "name": "",
+                    "note": "模板库暂无该类型组合的模板，请到「模板库」上传，或继续手动选择模板。",
+                }
+            )
         return {
             "groups": groups,
             "total": total,
@@ -608,6 +784,15 @@ class Service:
             "history_count": history_count,
             "na_count": na_count,
             "org_form": org_form_value,
+            "template": {"id": info.id, "name": info.name} if info else None,
+            "template_hint": template_hint,
+            "unmapped_placeholders": list(info.unmapped) if info else [],
+            "scope": {
+                **scope.to_dict(),
+                "axes": axis_options(),
+                "suggested": suggested,
+                "template_hint": template_hint,
+            },
         }
 
     def generate_document(
@@ -615,6 +800,8 @@ class Service:
         job: Job,
         values: dict[str, Any],
         missing_mode: str = "mark",
+        template_id: str = "",
+        custom_fields: list[dict[str, Any]] | None = None,
     ) -> Path:
         """用用户确认后的值渲染招标文件，返回输出路径。"""
         if job.result_obj is None and job.result is not None:
@@ -628,9 +815,11 @@ class Service:
         target = _unique_path(output_dir / f"{stem}-招标文件.docx")
         generated = generate_tender_document(
             job.result_obj,
+            template_path=self.templates.compiled_path(template_id),
             output_path=target,
             missing_mode=missing_mode,
             overrides=values,
+            custom_fields=custom_fields,
         )
         return generated.output_path
 
@@ -1257,8 +1446,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_static("settings.html")
         if path in {"/company", "/company.html"}:
             return self._serve_static("company.html")
+        if path in {"/templates", "/templates.html"}:
+            return self._serve_static("templates.html")
         if path.startswith("/assets/"):
             return self._serve_static(path[len("/assets/"):])
+        if path.startswith("/api/templates"):
+            return self._handle_template_get(path)
         if path == "/api/health":
             return self._send_json(self.service.health())
         if path == "/api/company":
@@ -1282,11 +1475,17 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/projects/"):
             return self._handle_project_get(parsed.path)
         if path.startswith("/api/jobs/"):
-            return self._handle_job_get(path)
+            return self._handle_job_get(path, parse_qs(parsed.query))
         self._send_json({"error": "未找到该路径"}, 404)
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/api/templates":
+            return self._handle_template_create(parse_qs(parsed.query))
+        if re.fullmatch(r"/api/templates/[^/]+/(rename|default)", parsed.path):
+            return self._handle_template_action(parsed.path)
+        if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/preview"):
+            return self._handle_preview(parsed.path)
         if parsed.path == "/api/compare":
             return self._handle_compare()
         if parsed.path == "/api/projects":
@@ -1341,6 +1540,128 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
     # 项目工作台
     # ------------------------------------------------------------------
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if re.fullmatch(r"/api/templates/[^/]+", parsed.path):
+            return self._handle_template_delete(parsed.path)
+        return self._send_json({"error": "未找到该路径"}, 404)
+
+    # ------------------------------------------------------------------
+    # 模板库
+    # ------------------------------------------------------------------
+
+    def _handle_template_get(self, path: str) -> None:
+        """GET /api/templates、/api/templates/{id}、/api/templates/{id}/preview。"""
+        parts = [item for item in path.split("/") if item]
+        if len(parts) == 2:  # ["api", "templates"]
+            return self._send_json({"templates": self.service.list_templates()})
+        if len(parts) < 3:
+            return self._send_json({"error": "无效的模板路径"}, 400)
+
+        template_id = parts[2]
+        if len(parts) == 3:
+            info = self.service.get_template(template_id)
+            if info is None:
+                return self._send_json({"error": "模板不存在"}, 404)
+            return self._send_json(info)
+        if parts[3] == "preview":
+            return self._handle_template_preview(template_id)
+        return self._send_json({"error": "未找到该路径"}, 404)
+
+    def _handle_template_preview(self, template_id: str) -> None:
+        """空值预览：模板本身长什么样、哪些占位符没对应字段。"""
+        try:
+            compiled = self.service.templates.compiled_path(template_id)
+            preview = build_preview(compiled, {}, "mark", None)
+        except FileNotFoundError as exc:
+            return self._send_json({"error": str(exc)}, 404)
+        except Exception as exc:  # noqa: BLE001 - 模板损坏统一兜底
+            return self._send_json({"error": f"预览失败：{exc}"}, 500)
+        preview["template"] = self.service.template_brief(template_id, compiled)
+        return self._send_json(preview)
+
+    def _handle_template_create(self, query: dict[str, list[str]]) -> None:
+        """上传模板：body 为 .docx 二进制，与 /api/extract 同风格。"""
+        filename = (query.get("filename") or [""])[0].strip()
+        meta = {
+            "name": (query.get("name") or [""])[0].strip(),
+            "category": (query.get("category") or ["other"])[0].strip(),
+            "method": (query.get("method") or ["other"])[0].strip(),
+            "version": (query.get("version") or ["1.0"])[0].strip(),
+        }
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._send_json({"error": "Content-Length 无效"}, 400)
+        if length <= 0:
+            return self._send_json({"error": "请求体为空，未收到模板文件"}, 400)
+        if length > MAX_UPLOAD_BYTES:
+            return self._send_json(
+                {"error": f"文件超过上限 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB"}, 413
+            )
+
+        payload = self.rfile.read(length)
+        try:
+            info = self.service.create_template(filename, payload, **meta)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 400)
+        return self._send_json(info, 201)
+
+    def _handle_template_action(self, path: str) -> None:
+        parts = [item for item in path.split("/") if item]
+        if len(parts) != 4:
+            return self._send_json({"error": "无效的模板路径"}, 400)
+        template_id, action = parts[2], parts[3]
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json({"error": "请求体不是合法 JSON 对象"}, 400)
+        try:
+            if action == "rename":
+                info = self.service.rename_template(
+                    template_id, str(body.get("name") or "")
+                )
+            else:
+                info = self.service.set_default_template(template_id)
+        except KeyError:
+            return self._send_json({"error": "模板不存在"}, 404)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 400)
+        return self._send_json(info)
+
+    def _handle_template_delete(self, path: str) -> None:
+        self._drain_body()
+        parts = [item for item in path.split("/") if item]
+        if len(parts) != 3:
+            return self._send_json({"error": "无效的模板路径"}, 400)
+        try:
+            self.service.delete_template(parts[2])
+        except KeyError:
+            return self._send_json({"error": "模板不存在"}, 404)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 400)
+        return self._send_json({"ok": True})
+
+    def _handle_preview(self, path: str) -> None:
+        """按当前填写值预览成稿（不落盘）。"""
+        parts = [item for item in path.split("/") if item]
+        if len(parts) < 4:
+            return self._send_json({"error": "无效的任务路径"}, 400)
+        job = self.service.get(parts[2])
+        if job is None:
+            return self._send_json({"error": "任务不存在或已过期"}, 404)
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json({"error": "请求体不是合法 JSON 对象"}, 400)
+        try:
+            payload = self.service.preview_job(job, body)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 400)
+        except FileNotFoundError as exc:
+            return self._send_json({"error": str(exc)}, 500)
+        except Exception as exc:  # noqa: BLE001 - 模板损坏统一兜底
+            return self._send_json({"error": f"预览失败：{exc}"}, 500)
+        return self._send_json(payload)
 
     def _read_json_body(self) -> dict[str, Any] | None:
         try:
@@ -1564,7 +1885,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _handle_job_get(self, path: str) -> None:
+    def _handle_job_get(
+        self, path: str, query: dict[str, list[str]] | None = None
+    ) -> None:
         parts = [item for item in path.split("/") if item]
         # ["api", "jobs", id, ...]
         if len(parts) < 3:
@@ -1582,7 +1905,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"error": "任务尚未完成"}, 409)
             return self._send_json(payload)
         if action == "fields":
-            payload = self.service.job_fields(job)
+            query = query or {}
+            template_id = (query.get("template_id") or [None])[0]
+            scope_args = {
+                axis: (query.get(axis) or [""])[0]
+                for axis in ("method", "category", "org_form")
+            }
+            try:
+                payload = self.service.job_fields(job, template_id, **scope_args)
+            except ValueError as exc:
+                # 类型取值非法直接 400，别把配置校验错误变成 500 或静默按默认值处理
+                return self._send_json({"error": str(exc)}, 400)
             if payload is None:
                 return self._send_json({"error": "任务尚未完成"}, 409)
             return self._send_json(payload)
@@ -1725,9 +2058,13 @@ class Handler(BaseHTTPRequestHandler):
         missing_mode = body.get("missing_mode") or "mark"
         if missing_mode not in {"mark", "empty"}:
             return self._send_json({"error": "missing_mode 只能是 mark 或 empty"}, 400)
+        template_id = str(body.get("template_id") or "").strip()
+        custom_fields = self.service.normalize_custom_fields(body.get("custom_fields"))
 
         try:
-            target = self.service.generate_document(job, values, missing_mode)
+            target = self.service.generate_document(
+                job, values, missing_mode, template_id, custom_fields
+            )
         except ValueError as exc:
             return self._send_json({"error": str(exc)}, 409)
         except FileNotFoundError as exc:

@@ -30,6 +30,7 @@ from typing import Any
 import docx
 from docxtpl import DocxTemplate
 from docx.oxml.ns import qn
+from docx.shared import Pt
 
 from .models import ExtractionResult
 
@@ -142,6 +143,7 @@ def generate_tender_document(
     output_path: Path | str | None = None,
     missing_mode: str = "mark",
     overrides: dict[str, Any] | None = None,
+    custom_fields: list[dict[str, Any]] | None = None,
 ) -> GenerationResult:
     """把抽取结果渲染成完整招标文件。
 
@@ -153,6 +155,9 @@ def generate_tender_document(
             或 ``empty``（留空）。
         overrides: 用户人工确认/修改后的值，键为模板占位符名（如「项目名称」）。
             优先级高于抽取结果，用于「AI 建议 + 人工拍板」工作流。
+        custom_fields: 用户自定义字段。``target=placeholder`` 的写入同名
+            占位符（优先级低于 overrides）；``target=append`` 的在文末生成
+            「补充条款」表格。
 
     Returns:
         GenerationResult：输出路径、填充清单、缺失清单与填充率。
@@ -181,6 +186,15 @@ def generate_tender_document(
             if key:
                 values[key] = _stringify(value)
 
+    # 自定义字段：绑定占位符的补空缺（不覆盖人工值），追加类在文末补表
+    customs = [item for item in (custom_fields or []) if isinstance(item, dict)]
+    for item in customs:
+        if (item.get("target") or "append") != "placeholder":
+            continue
+        placeholder = str(item.get("placeholder") or "").strip()
+        if placeholder and not values.get(placeholder):
+            values[placeholder] = _stringify(item.get("value"))
+
     for name, source_keys in DERIVED_KEYS.items():
         if name in names and not values.get(name):
             for key in source_keys:
@@ -207,6 +221,7 @@ def generate_tender_document(
 
     # 渲染字段占位符后，把 structured 里的表格型数据回填进招标文件的表格/附表
     _fill_document_tables(tpl, result)
+    _append_custom_fields(tpl, customs)
 
     target = _resolve_output_path(result, Path(output_path) if output_path else None)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -358,6 +373,42 @@ def _fill_tech_table(
         row = table.add_row()
         _write_row_cells(row, [ptype, seq, text])
         note_row._tr.addprevious(row._tr)
+
+
+def _append_custom_fields(document, items: list[dict[str, Any]]) -> None:
+    """把「追加到文末」的自定义字段写成补充条款表。
+
+    为什么不插到正文指定位置：占位符只能落在模板已有的位置，任意插段需要
+    段落级定位与格式复制，收益远低于成本；文末补充条款是招标文件的常规
+    做法，位置稳定、可预期，也不会打乱已有表格的填充索引。
+    """
+    rows = [
+        (str(item.get("label") or "").strip(), str(item.get("value") or "").strip())
+        for item in items
+        if (item.get("target") or "append") == "append"
+    ]
+    rows = [pair for pair in rows if pair[0] and pair[1]]
+    if not rows:
+        return
+
+    document.add_page_break()
+    heading = document.add_paragraph("补充条款")
+    if heading.runs:
+        heading.runs[0].bold = True
+        heading.runs[0].font.size = Pt(14)
+
+    table = document.add_table(rows=1, cols=2)
+    try:
+        table.style = "Table Grid"
+    except KeyError:
+        pass  # 模板缺该样式时退化为无边框表，内容仍然可读
+    header = table.rows[0].cells
+    header[0].text = "字段"
+    header[1].text = "内容"
+    for label, value in rows:
+        cells = table.add_row().cells
+        cells[0].text = label
+        cells[1].text = value
 
 
 def _fill_document_tables(document, result: ExtractionResult) -> None:

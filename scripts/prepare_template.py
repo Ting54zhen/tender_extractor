@@ -3,79 +3,65 @@
 转换规则：
     {占位符}  ->  {{ d["占位符"] }}
 
-跨 run 占位符：合并段落全文后整体重写，保留段落首个 run 的格式。
+批量处理 templates/ 下的全部源模板（货物类、竞争性磋商等派生模板同样
+走这里），新增模板不用再改脚本。转换逻辑本身在
+``tender_extractor.template_tools``——模板库上传走的是同一份实现，两处
+各写一份必然漂移。
+
 产物写入 templates/compiled/，源模板保持不动。
 
 用法：
     python scripts/prepare_template.py
 """
 
-import re
 import sys
 from pathlib import Path
 
-import docx
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SOURCE = PROJECT_ROOT / "templates" / "广东省政府采购公开招标标准模板.docx"
-TARGET_DIR = PROJECT_ROOT / "templates" / "compiled"
-TARGET = TARGET_DIR / SOURCE.name
-PLACEHOLDER = re.compile(r"(?<!\{)\{([^{}]{1,30})\}(?!\})")
+TEMPLATE_DIR = PROJECT_ROOT / "templates"
+TARGET_DIR = TEMPLATE_DIR / "compiled"
+
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+import docx  # noqa: E402
+
+from tender_extractor.template_tools import (  # noqa: E402
+    SOURCE_PLACEHOLDER,
+    iter_paragraphs,
+    to_jinja,
+)
 
 
-def to_jinja(match: re.Match[str]) -> str:
-    """把 {占位符} 转为 Jinja2 dict 取值表达式（中文字符串键安全）。"""
-    name = match.group(1).strip()
-    return '{{ d["%s"] }}' % name
+def convert(source: Path) -> int:
+    """转换单个源模板，返回剩余未转换的占位符段落数。"""
+    document = docx.Document(str(source))
+    rewritten = to_jinja(document)
+    target = TARGET_DIR / source.name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    document.save(str(target))
 
-
-def iter_paragraphs(document):
-    """遍历正文、表格单元格、页眉页脚中的所有段落。"""
-    for para in document.paragraphs:
-        yield para
-    for table in document.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for para in cell.paragraphs:
-                    yield para
-    for section in document.sections:
-        for container in (section.header, section.footer):
-            for para in container.paragraphs:
-                yield para
-
-
-def rewrite_paragraph(para) -> bool:
-    """重写包含占位符的段落；返回是否发生改写。"""
-    full_text = para.text
-    if not PLACEHOLDER.search(full_text):
-        return False
-    if not para.runs:
-        print(f"[跳过] 段落无 run，无法写入: {full_text[:40]!r}")
-        return False
-    new_text = PLACEHOLDER.sub(to_jinja, full_text)
-    para.runs[0].text = new_text
-    for run in para.runs[1:]:
-        run.text = ""
-    return True
+    remaining = [
+        para.text
+        for para in iter_paragraphs(document)
+        if SOURCE_PLACEHOLDER.search(para.text)
+    ]
+    print(f"[{source.name}] 改写段落 {rewritten} -> compiled/{target.name}")
+    if remaining:
+        print(f"  ! 剩余未转换占位符段落: {len(remaining)}")
+        for text in remaining[:5]:
+            print(f"    {text[:60]}")
+    return len(remaining)
 
 
 def main() -> int:
-    if not SOURCE.exists():
-        print(f"NOT_FOUND: {SOURCE}")
+    sources = sorted(path for path in TEMPLATE_DIR.glob("*.docx") if path.is_file())
+    if not sources:
+        print(f"NOT_FOUND: {TEMPLATE_DIR}/*.docx")
         return 1
-    document = docx.Document(str(SOURCE))
-    rewritten = sum(1 for para in iter_paragraphs(document) if rewrite_paragraph(para))
-    TARGET_DIR.mkdir(parents=True, exist_ok=True)
-    document.save(str(TARGET))
-    print(f"改写段落数: {rewritten}")
-    print(f"已生成: {TARGET}")
-    remaining = [
-        para.text for para in iter_paragraphs(document) if PLACEHOLDER.search(para.text)
-    ]
-    print(f"剩余未转换占位符段落: {len(remaining)}")
-    for text in remaining[:5]:
-        print(f"  ! {text[:60]}")
-    return 0
+    failed = 0
+    for source in sources:
+        failed += convert(source)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

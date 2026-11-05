@@ -529,6 +529,96 @@ def test_find_soffice_covers_macos_bundle():
     )
 
 
+def _scope_job() -> object:
+    """构造一个字段齐全的最小 done 任务，供类型字段集断言使用。"""
+    from tender_extractor.web import Job
+
+    fields = {
+        key: {"key": key, "label": key, "template": key, "value": value, "status": "ok"}
+        for key, value in {
+            "tender_org_form": "委托招标",
+            "procurement_method": "公开招标",
+            "price_method": "综合评分法",
+            "agency": "某代理机构",
+            "agency_fee": "按标准收取",
+            "tech_score": "40",
+            "business_score": "30",
+            "price_score": "30",
+            "contract_period": "12 个月",
+            "contract_scope": "全部服务",
+        }.items()
+    }
+    return Job(
+        id="scope-job", filename="scope.docx", use_llm=False,
+        allow_non_tender=False, status="done", result={"fields": fields},
+    )
+
+
+def test_job_fields_scope_query_filters_and_overrides(service):
+    """选询价 + 货物 + 自主招标：评分字段不适用、标签覆写、专属字段下发。"""
+    data = service.job_fields(
+        _scope_job(), None, method="inquiry", category="goods", org_form="self"
+    )
+    items = {it["key"]: it for group in data["groups"] for it in group["items"]}
+
+    assert items["agency"]["na"] is True
+    assert items["tech_score"]["na"] is True
+    assert items["price_score"]["na"] is True
+    assert items["contract_period"]["label"] == "合同交货期限"
+    assert items["contract_scope"]["label"] == "合同供货范围"
+
+    scope = data["scope"]
+    assert scope["complete"] is True
+    assert scope["axes"]["category"]
+    assert any(f["key"] == "scope_goods_warranty" for f in scope["extra_fields"])
+    assert any(f["key"] == "scope_import_allowed" for f in scope["extra_fields"])
+    assert items["tech_score"]["na_reason"]
+
+
+def test_job_fields_without_scope_keeps_legacy_behavior(service):
+    """不带类型参数时沿用旧行为（从原文推断组织形式），不擅自过滤字段。"""
+    data = service.job_fields(_scope_job())
+
+    assert data["scope"]["complete"] is False
+    assert data["scope"]["extra_fields"] == []
+    items = {it["key"]: it for group in data["groups"] for it in group["items"]}
+    assert items["agency"]["na"] is False
+    assert items["tech_score"]["na"] is False
+    assert items["contract_period"]["label"] == "contract_period"
+
+
+def test_fields_api_accepts_scope_query(server, service):
+    """/fields 的 HTTP 入口要把三个类型参数真正传到 Service。"""
+    from tender_extractor.web import Job
+
+    fields = {
+        key: {"key": key, "label": key, "template": key, "value": value, "status": "ok"}
+        for key, value in {
+            "agency": "某代理机构", "tech_score": "40", "contract_period": "12 个月",
+            "tender_org_form": "委托招标", "procurement_method": "公开招标",
+        }.items()
+    }
+    job = Job(
+        id="http-scope", filename="scope.docx", use_llm=False,
+        allow_non_tender=False, status="done", result={"fields": fields},
+    )
+    service.jobs[job.id] = job
+
+    status, data = _get(
+        f"{server}/api/jobs/http-scope/fields?method=inquiry&category=goods&org_form=self"
+    )
+    assert status == 200
+    assert data["scope"]["complete"] is True
+    items = {it["key"]: it for group in data["groups"] for it in group["items"]}
+    assert items["agency"]["na"] is True
+    assert items["tech_score"]["na"] is True
+    assert items["contract_period"]["label"] == "合同交货期限"
+
+    status, data = _get(f"{server}/api/jobs/http-scope/fields?method=bogus")
+    assert status == 400
+    assert "采购方式" in data["error"]
+
+
 def test_find_soffice_falls_back_to_path(monkeypatch, tmp_path):
     """系统安装路径都不存在时，退回 PATH 里的 soffice，兼容 Linux 与 Homebrew 安装。"""
     from tender_extractor import web

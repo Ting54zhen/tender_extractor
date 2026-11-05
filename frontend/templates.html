@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>模板库 · 招标需求解析</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%232563eb'/%3E%3Cpath%20d='M10%207h8l5%205v13a1%201%200%200%201-1%201H10a1%201%200%200%201-1-1V8a1%201%200%200%201%201-1z'%20fill='%23fff'/%3E%3Cpath%20d='M18%207v5h5'%20fill='%23c2d8ff'/%3E%3Cpath%20d='M12.5%2016h7M12.5%2019.5h4.5'%20stroke='%232563eb'%20stroke-width='1.4'%20stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/app.css">
+<link rel="stylesheet" href="/assets/preview.css">
+<style>
+  .tpl-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 14px;
+    margin-top: 14px;
+  }
+  .tpl-card { padding: 16px; }
+  .tpl-card h3 {
+    margin: 0 0 6px; font-family: var(--font-serif);
+    font-size: 17px; font-weight: 400; line-height: 1.35;
+    word-break: break-all;
+  }
+  .tpl-card .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tpl-card .badges .tag { font-size: 10.5px; }
+  .tpl-meta { font-size: 12px; color: var(--muted); line-height: 1.7; }
+  .tpl-meta b { color: var(--amber); font-weight: 600; }
+  .tpl-meta .dim { color: var(--faint); }
+  .tpl-actions {
+    display: flex; gap: 6px; flex-wrap: wrap;
+    margin-top: 12px; padding-top: 10px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .tpl-actions .spacer { flex: 1; }
+  .ph-list { max-height: 52vh; overflow: auto; margin-top: 8px; }
+  .ph-list .row {
+    display: flex; gap: 8px; align-items: flex-start;
+    padding: 7px 0; border-bottom: 1px solid var(--line-soft);
+    font-size: 12.5px;
+  }
+  .ph-list .row:last-child { border-bottom: none; }
+  .ph-list .row code {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px; word-break: break-all;
+  }
+  .ph-list .row .spacer { flex: 1; }
+  .upload-hint {
+    font-size: 12px; color: var(--muted); line-height: 1.7;
+    background: var(--surface-2); border-radius: var(--r-sm);
+    padding: 9px 11px; margin-top: 10px;
+  }
+  .dlg-body label.radio-line {
+    display: flex; align-items: center; gap: 6px;
+    margin: 8px 0; color: var(--ink-2); font-size: 13px;
+  }
+  .dlg-body label.radio-line input { width: auto; }
+  @media (max-width: 760px) {
+    .tpl-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <main class="main">
+    <div class="main-inner wide">
+      <div class="page-head">
+        <h1>模板库</h1>
+        <p>一套模板对应一种采购品目与采购方式的成稿版式；内置模板只读，自有模板可上传</p>
+      </div>
+
+      <div class="toolbar">
+        <span class="chip">共 <b id="count">0</b> 套模板</span>
+        <div class="spacer"></div>
+        <button class="btn" id="btnRefresh">刷新</button>
+        <button class="btn primary" id="btnUpload">＋ 上传模板</button>
+        <input type="file" id="fileInput" accept=".docx" hidden>
+      </div>
+
+      <div id="notice" class="notice hidden"></div>
+      <div id="list" class="tpl-grid"></div>
+
+      <footer>内置模板随程序分发；上传的模板保存在本机 data/templates/，不会上传到外部服务</footer>
+    </div>
+  </main>
+</div>
+
+<dialog id="dlgUpload">
+  <div class="dlg-body">
+    <h3>上传招标文件模板</h3>
+    <div class="upload-hint" id="uploadFile"></div>
+    <label>模板名称</label>
+    <input id="upName" maxlength="80">
+    <label>品目类别</label>
+    <select id="upCategory">
+      <option value="goods">货物</option>
+      <option value="service" selected>服务</option>
+      <option value="works">工程</option>
+      <option value="other">其他</option>
+    </select>
+    <label>采购方式</label>
+    <select id="upMethod">
+      <option value="open">公开招标</option>
+      <option value="invite">邀请招标</option>
+      <option value="negotiation">竞争性磋商</option>
+      <option value="inquiry">询价</option>
+      <option value="competitive">竞争性谈判</option>
+      <option value="single">单一来源</option>
+      <option value="other">其他</option>
+    </select>
+    <div class="upload-hint">
+      占位符请写成单花括号，例如 <code>{项目名称}</code>。上传后会自动分析哪些占位符还没有对应字段。
+    </div>
+    <div class="dlg-foot">
+      <button class="btn" id="upCancel">取消</button>
+      <button class="btn primary" id="upSave">上传并解析</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dlgRename">
+  <div class="dlg-body">
+    <h3>重命名模板</h3>
+    <label>模板名称</label>
+    <input id="rnName" maxlength="80">
+    <div class="dlg-foot">
+      <button class="btn" id="rnCancel">取消</button>
+      <button class="btn primary" id="rnSave">保存</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dlgConfirm">
+  <div class="dlg-body">
+    <h3 id="cfTitle">确认操作</h3>
+    <p id="cfText" style="font-size:13px;color:var(--muted);line-height:1.7;margin:0"></p>
+    <div class="dlg-foot">
+      <button class="btn" id="cfCancel">取消</button>
+      <button class="btn primary" id="cfOk">确认</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dlgDetail">
+  <div class="dlg-body">
+    <h3 id="dtTitle">模板详情</h3>
+    <p style="font-size:12.5px;color:var(--muted);line-height:1.7;margin:0">
+      以下是这套模板里的占位符。标为「未匹配」的，说明字段库里还没有对应字段；
+      可以到填写工作台点「＋ 自定义字段」，写入位置选「写入模板已有占位符」来补上。
+    </p>
+    <div class="ph-list" id="dtList"></div>
+    <div class="dlg-foot"><button class="btn" id="dtClose">关闭</button></div>
+  </div>
+</dialog>
+
+<dialog id="dlgPreview" class="dlg-preview">
+  <div class="dlg-body">
+    <h3 id="pvTitle" style="margin-bottom:10px">模板预览</h3>
+    <div class="preview-scroll" id="pvBody"><div class="paper" id="pvPaper"></div></div>
+    <p class="pv-hint">预览为结构近似，字体与分页以生成的 .docx 为准；黄色标记为该模板中的占位符。</p>
+    <div class="dlg-foot"><button class="btn" id="pvClose">关闭</button></div>
+  </div>
+</dialog>
+
+<script src="/assets/shell.js"></script>
+<script src="/assets/preview.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var CATEGORY = { goods: "货物", service: "服务", works: "工程", other: "其他" };
+  var METHOD = {
+    open: "公开招标", invite: "邀请招标", negotiation: "竞争性磋商",
+    inquiry: "询价", competitive: "竞争性谈判", single: "单一来源", other: "其他"
+  };
+
+  var templates = [];
+  var pendingFile = null;
+  var currentId = "";
+  var confirmAction = null;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = window.TenderPreview.esc;
+
+  function notice(msg, kind) {
+    var el = $("notice");
+    if (!msg) { el.className = "notice hidden"; return; }
+    el.className = "notice" + (kind ? " " + kind : "");
+    el.textContent = msg;
+  }
+
+  function labelOf(map, key) { return map[key] || key || "—"; }
+
+  async function api(path, options) {
+    var res = await fetch(path, options);
+    var data = await res.json().catch(function () { return {}; });
+    if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+    return data;
+  }
+
+  function findTemplate(id) {
+    for (var i = 0; i < templates.length; i += 1) {
+      if (templates[i].id === id) return templates[i];
+    }
+    return null;
+  }
+
+  function cardHtml(t) {
+    var unmapped = (t.unmapped || []).length;
+    var badges =
+      (t.builtin ? '<span class="tag work">内置 · 只读</span>' : '<span class="tag ok">自有模板</span>') +
+      (t.is_default ? '<span class="tag ok">默认</span>' : "");
+    var date = String(t.created_at || "").slice(0, 10);
+    var actions =
+      '<button class="btn small ghost" data-act="preview" data-id="' + esc(t.id) + '">预览</button>' +
+      '<button class="btn small ghost" data-act="detail" data-id="' + esc(t.id) + '">占位符</button>' +
+      (t.is_default ? "" :
+        '<button class="btn small ghost" data-act="default" data-id="' + esc(t.id) + '">设为默认</button>') +
+      (t.builtin ? "" :
+        '<button class="btn small ghost" data-act="rename" data-id="' + esc(t.id) + '">重命名</button>' +
+        '<button class="btn small ghost danger" data-act="delete" data-id="' + esc(t.id) + '">删除</button>');
+
+    return '<article class="card tpl-card">' +
+      '<h3>' + esc(t.name) + "</h3>" +
+      '<div class="badges">' + badges + "</div>" +
+      '<div class="tpl-meta">' +
+        labelOf(CATEGORY, t.category) + " · " + labelOf(METHOD, t.method) +
+        " · v" + esc(t.version || "1.0") + "<br>" +
+        "占位符 " + (t.placeholder_count != null ? t.placeholder_count : (t.placeholders || []).length) + " 个" +
+        (unmapped ? " · <b>未匹配 " + unmapped + " 个</b>" : " · 全部已匹配") +
+        (t.missing_fields && t.missing_fields.length
+          ? " · <b>缺 " + t.missing_fields.length + " 个字段位</b>" : "") +
+        (date ? '<br><span class="dim">' + esc(date) + "</span>" : "") +
+      "</div>" +
+      '<div class="tpl-actions">' + actions + "</div>" +
+      "</article>";
+  }
+
+  function render() {
+    $("count").textContent = templates.length;
+    if (!templates.length) {
+      $("list").innerHTML = '<div class="empty">还没有模板。点右上角「上传模板」添加一套 .docx 招标文件范本。</div>';
+      return;
+    }
+    $("list").innerHTML = templates.map(cardHtml).join("");
+  }
+
+  async function load() {
+    try {
+      var data = await api("/api/templates");
+      templates = data.templates || [];
+      render();
+      var unmatched = templates.reduce(function (n, t) {
+        return n + (t.unmapped || []).length;
+      }, 0);
+      if (unmatched) {
+        notice("有 " + unmatched + " 个占位符没有对应字段，点卡片的「占位符」查看，可在填写工作台绑定。", "warn");
+      } else {
+        notice("");
+      }
+    } catch (err) {
+      notice("加载模板库失败：" + err.message, "error");
+    }
+  }
+
+  function askConfirm(title, text, action) {
+    $("cfTitle").textContent = title;
+    $("cfText").textContent = text;
+    confirmAction = action;
+    $("dlgConfirm").showModal();
+  }
+
+  async function doAction(act, id) {
+    var t = findTemplate(id);
+    if (!t) return;
+    try {
+      if (act === "rename") {
+        currentId = id;
+        $("rnName").value = t.name;
+        $("dlgRename").showModal();
+        return;
+      }
+      if (act === "default") {
+        await api("/api/templates/" + encodeURIComponent(id) + "/default", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        await load();
+        notice("已将「" + t.name + "」设为默认模板。");
+        return;
+      }
+      if (act === "delete") {
+        askConfirm("删除模板", "确定删除「" + t.name + "」吗？已生成的招标文件不受影响；如果它是默认模板，会自动回退到内置模板。", async function () {
+          try {
+            await api("/api/templates/" + encodeURIComponent(id), { method: "DELETE" });
+            await load();
+            notice("模板已删除。");
+          } catch (err) { notice("删除失败：" + err.message, "error"); }
+        });
+        return;
+      }
+      if (act === "detail") {
+        showDetail(t);
+        return;
+      }
+      if (act === "preview") {
+        showPreview(t);
+        return;
+      }
+    } catch (err) {
+      notice("操作失败：" + err.message, "error");
+    }
+  }
+
+  function showDetail(t) {
+    var defined = {};
+    (t.unmapped || []).forEach(function (name) { defined[name] = true; });
+    var rows = (t.placeholders || []).map(function (name) {
+      return '<div class="row"><code>{' + esc(name) + "}</code>" +
+        '<div class="spacer"></div>' +
+        (defined[name] ? '<span class="tag low">未匹配字段</span>' : '<span class="tag ok">已匹配</span>') +
+        "</div>";
+    }).join("");
+    $("dtTitle").textContent = t.name;
+    $("dtList").innerHTML = rows || '<div class="empty">这套模板没有解析到占位符。</div>';
+    $("dlgDetail").showModal();
+  }
+
+  async function showPreview(t) {
+    $("pvTitle").textContent = "预览 · " + t.name;
+    $("pvPaper").innerHTML = '<p class="pv-body">正在解析模板结构…</p>';
+    $("dlgPreview").showModal();
+    try {
+      var data = await api("/api/templates/" + encodeURIComponent(t.id) + "/preview");
+      $("pvPaper").innerHTML = window.TenderPreview.render(data.sections);
+    } catch (err) {
+      $("pvPaper").innerHTML = '<p class="pv-body">预览失败：' + esc(err.message) + "</p>";
+    }
+  }
+
+  async function upload() {
+    if (!pendingFile) return;
+    var name = $("upName").value.trim();
+    var btn = $("upSave");
+    btn.disabled = true;
+    btn.textContent = "解析中…";
+    var query = new URLSearchParams({
+      filename: pendingFile.name,
+      name: name,
+      category: $("upCategory").value,
+      method: $("upMethod").value
+    });
+    try {
+      var info = await api("/api/templates?" + query.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: pendingFile
+      });
+      $("dlgUpload").close();
+      await load();
+      notice((info.unmapped && info.unmapped.length)
+        ? "已上传「" + info.name + "」，其中 " + info.unmapped.length +
+          " 个占位符没有对应字段，点卡片「占位符」查看。"
+        : "已上传「" + info.name + "」，全部占位符都能对应字段。",
+        (info.unmapped && info.unmapped.length) ? "warn" : "");
+    } catch (err) {
+      notice("上传失败：" + err.message, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "上传并解析";
+    }
+  }
+
+  $("list").addEventListener("click", function (ev) {
+    var btn = ev.target.closest("button[data-act]");
+    if (!btn) return;
+    doAction(btn.dataset.act, btn.dataset.id);
+  });
+
+  $("btnRefresh").addEventListener("click", load);
+  $("btnUpload").addEventListener("click", function () { $("fileInput").click(); });
+
+  $("fileInput").addEventListener("change", function () {
+    var file = this.files && this.files[0];
+    if (!file) return;
+    if (!/\.docx$/i.test(file.name)) {
+      notice("只支持 .docx 模板；.doc 请先用 Word 另存为 .docx。", "error");
+      this.value = "";
+      return;
+    }
+    pendingFile = file;
+    $("uploadFile").textContent = "已选择：" + file.name + "（" +
+      Math.round(file.size / 1024) + " KB）";
+    $("upName").value = file.name.replace(/\.docx$/i, "");
+    $("dlgUpload").showModal();
+    this.value = "";
+  });
+
+  $("upCancel").addEventListener("click", function () { $("dlgUpload").close(); });
+  $("upSave").addEventListener("click", upload);
+  $("rnCancel").addEventListener("click", function () { $("dlgRename").close(); });
+  $("rnSave").addEventListener("click", async function () {
+    var name = $("rnName").value.trim();
+    if (!name) { notice("模板名称不能为空。", "error"); return; }
+    try {
+      await api("/api/templates/" + encodeURIComponent(currentId) + "/rename", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name })
+      });
+      $("dlgRename").close();
+      await load();
+      notice("已重命名。");
+    } catch (err) { notice("重命名失败：" + err.message, "error"); }
+  });
+
+  $("cfCancel").addEventListener("click", function () {
+    confirmAction = null;
+    $("dlgConfirm").close();
+  });
+  $("cfOk").addEventListener("click", function () {
+    var fn = confirmAction;
+    confirmAction = null;
+    $("dlgConfirm").close();
+    if (fn) fn();
+  });
+  $("dtClose").addEventListener("click", function () { $("dlgDetail").close(); });
+  $("pvClose").addEventListener("click", function () { $("dlgPreview").close(); });
+
+  load();
+})();
+</script>
+</body>
+</html>
