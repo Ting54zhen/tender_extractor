@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .cleaning import normalize_for_match, parse_money, parse_number, parse_percent
+from .compliance import analyze_compliance
 from .doc_type import DocTypeResult, classify_document
 from .document import read_document
 from .llm_extract import (
@@ -283,6 +284,7 @@ class Extractor:
         structured["business_requirements"] = rules_output.structured.get("business_requirements", {})
 
         review = self._build_review(field_values, validation, review_items)
+        compliance = analyze_compliance(doc).to_dict()
         duration_ms = int((time.perf_counter() - start) * 1000)
 
         result = ExtractionResult(
@@ -325,6 +327,7 @@ class Extractor:
                 "evidence_blocks": sum(len(f.evidence) for f in field_values.values()),
             },
             document_type=doc_type.to_dict(),
+            compliance=compliance,
         )
         return result
 

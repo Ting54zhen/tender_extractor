@@ -208,6 +208,31 @@ def test_budget_cross_check_uses_four_decimal_precision():
     assert "100,000.0000元" in errors[0]["message"]
 
 
+def _build_compliance_docx(path):
+    doc = DocxDocument()
+    doc.add_paragraph("某某单位采购需求报告")
+    doc.add_paragraph("项目名称：合规测试项目")
+    doc.add_paragraph("预算金额：100,000.00元")
+    doc.add_paragraph("二、资格要求")
+    doc.add_paragraph("投标人注册资本不低于1000万元。")
+    doc.save(str(path))
+
+
+def test_extraction_includes_compliance_findings(tmp_path):
+    """合规审查随抽取结果一起产出，命中项必须能回链到原文块。"""
+    path = tmp_path / "合规.docx"
+    _build_compliance_docx(path)
+
+    extractor = Extractor(settings_override={"llm": {"enabled": False}})
+    data = extractor.extract(path, use_llm=False).to_dict()
+
+    findings = data["compliance"]["findings"]
+    assert findings
+    assert findings[0]["rule_id"] == "scale_condition"
+    assert findings[0]["block_id"]
+    assert findings[0]["quote"] in "投标人注册资本不低于1000万元。"
+
+
 def test_extract_document_helper(tmp_path):
     path = tmp_path / "需求报告.docx"
     _build_requirement_docx(path)

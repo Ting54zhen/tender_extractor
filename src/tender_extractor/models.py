@@ -157,6 +157,7 @@ class ExtractionResult:
     review: list[dict[str, Any]]
     audit: dict[str, Any]
     document_type: dict[str, Any] = field(default_factory=dict)
+    compliance: dict[str, Any] = field(default_factory=dict)
 
     def template_values(self) -> dict[str, Any]:
         """只返回模板里真正有值的占位符，方便平台直接绑定。"""
@@ -188,6 +189,7 @@ class ExtractionResult:
             "cleaning": _clean_json_value(self.cleaning),
             "review": _clean_json_value(self.review),
             "audit": _clean_json_value(self.audit),
+            "compliance": _clean_json_value(self.compliance),
         }
 
 
@@ -232,4 +234,5 @@ def extraction_result_from_dict(data: dict[str, Any]) -> "ExtractionResult":
         review=list(data.get("review") or []),
         audit=dict(data.get("audit") or {}),
         document_type=dict(data.get("document_type") or {}),
+        compliance=dict(data.get("compliance") or {}),
     )
