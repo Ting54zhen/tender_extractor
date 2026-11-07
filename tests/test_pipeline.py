@@ -1,10 +1,35 @@
 """端到端测试：只用规则层，不依赖 Ollama。"""
+from __future__ import annotations
+
+from pathlib import Path
 
 from docx import Document as DocxDocument
 
 from tender_extractor import Extractor, extract_document
 from tender_extractor.models import FieldValue
 from tender_extractor.validation import cross_validate
+
+
+def test_progress_follows_real_pipeline_stages(tmp_path: Path) -> None:
+    """规则与证据处理应驱动进度；引擎不报告代表 Web 已落盘的 100%。"""
+    path = tmp_path / "需求报告.docx"
+    _build_requirement_docx(path)
+    events: list[tuple[int, str]] = []
+    extractor = Extractor(settings_override={"llm": {"enabled": False}, "review": {"enabled": False}})
+    result = extractor.extract(path, use_llm=False, on_progress=lambda percent, stage: events.append((percent, stage)))
+    assert result.fields["project_name"].value == "测试项目（一期）"
+    assert [percent for percent, _ in events] == [5, 15, 25, 35, 65, 75, 85, 90]
+    assert all(stage for _, stage in events)
+
+
+def test_invalid_document_stops_before_rule_progress(tmp_path: Path) -> None:
+    """跳过非采购文本时不能显示模型或证据处理阶段已执行。"""
+    path = tmp_path / "无关文本.txt"
+    path.write_text("这是一份个人简历，个人爱好是读书。", encoding="utf-8")
+    events: list[int] = []
+    result = Extractor().extract(path, use_llm=False, on_progress=lambda percent, stage: events.append(percent))
+    assert result.meta["extraction_skipped"]
+    assert events == [5, 15, 90]
 
 
 def _build_requirement_docx(path):

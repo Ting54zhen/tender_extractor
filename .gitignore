@@ -46,3 +46,7 @@ data/
 # 临时文件
 *.tmp
 *.log
+
+# npm 本地依赖与开发缓存；package-lock.json 必须提交以固定依赖树。
+node_modules/
+.vite/

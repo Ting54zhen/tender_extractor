@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -108,12 +109,21 @@ class Extractor:
         use_llm: bool = True,
         overrides: dict[str, Any] | None = None,
         allow_non_tender: bool = False,
+        on_progress: Callable[[int, str], None] | None = None,
     ) -> ExtractionResult:
+        """阶段完成后通知调用方；百分比表示流程里程碑，不推测模型剩余耗时。"""
+        def notify(percent: int, stage: str) -> None:
+            """可选回调让 CLI 和既有调用保持原行为，Web 则能报告实际阶段。"""
+            if on_progress is not None:
+                on_progress(percent, stage)
+
         start = time.perf_counter()
         path = Path(path)
+        notify(5, "正在读取需求文档")
         doc = read_document(path)
         source = self._source_info(path, doc)
 
+        notify(15, "文档已读取，正在识别文档类型")
         extraction_settings = self.settings.get("extraction", {})
         doc_type = classify_document(
             doc,
@@ -121,8 +131,10 @@ class Extractor:
         )
         require_tender = bool(extraction_settings.get("require_tender_document", True))
         if require_tender and not allow_non_tender and not doc_type.is_tender:
+            notify(90, "文档类型检查结束，正在整理审核结果")
             return self._skipped_result(source, doc, doc_type, start)
 
+        notify(25, "文档类型检查完成，正在抽取规则字段")
         rules_output = extract_rules(doc, self.field_defs)
 
         merged: dict[str, Candidate] = dict(rules_output.candidates)
@@ -137,6 +149,7 @@ class Extractor:
         )
 
         client: LLMClient | None = None
+        notify(35, "规则抽取完成，正在处理模型补缺" if llm_stats.enabled else "规则抽取完成，正在整理字段")
         if llm_stats.enabled:
             try:
                 client = build_llm_client(llm_settings)
@@ -158,6 +171,7 @@ class Extractor:
         normalizations: list[dict[str, Any]] = []
         repair_audit: list[dict[str, Any]] = []
 
+        notify(65, "字段抽取完成，正在校验与修复证据")
         if llm_stats.available and client is not None:
             max_rounds = int(llm_settings.get("max_repair_rounds", 2))
             for round_no in range(1, max_rounds + 1):
@@ -253,12 +267,14 @@ class Extractor:
         review_stats = ReviewStats()
         review_items: list[dict[str, Any]] = []
         review_settings = self.settings.get("review") or {}
+        notify(75, "证据校验完成，正在处理独立复核")
         if review_settings.get("enabled"):
             review_stats.enabled = True
             merged, review_stats, review_items = self._run_review(
                 doc, merged, review_settings, review_stats
             )
 
+        notify(85, "独立复核结束，正在执行最终校验")
         field_values = self._build_field_values(merged, attempts, conflicts)
         validation, normalizations = apply_validation(
             field_values,
@@ -329,6 +345,7 @@ class Extractor:
             document_type=doc_type.to_dict(),
             compliance=compliance,
         )
+        notify(90, "字段处理完成，正在整理解析结果")
         return result
 
     # ------------------------------------------------------------------

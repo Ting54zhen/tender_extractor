@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """web 项目工作台 / 设置 / 持久化恢复 API。"""
+from __future__ import annotations
 
 import json
 import threading
@@ -11,6 +12,63 @@ import pytest
 
 from tender_extractor.storage import Database
 from tender_extractor.web import Service, make_server
+
+
+def test_text_extraction_progress_and_restored_completion(service: Service, monkeypatch: pytest.MonkeyPatch) -> None:
+    """直接文字上传保持证据链；进度可观察，保存完成与重启恢复都显示 100%。"""
+    from tender_extractor import Extractor
+
+    # 暂停实际引擎的一个阶段，让测试确定地读到运行中进度，不依赖执行速度。
+    reached = threading.Event()
+    proceed = threading.Event()
+    extractor = Extractor(settings_override={"review": {"enabled": False}})
+    original = extractor.extract
+
+    def extract_with_pause(*args: object, **kwargs: object) -> object:
+        """只拦截阶段通知，文档读取、规则、证据校验仍调用真实实现。"""
+        callback = kwargs["on_progress"]
+
+        def notify(percent: int, stage: str) -> None:
+            callback(percent, stage)
+            if percent == 35:
+                reached.set()
+                assert proceed.wait(10)
+
+        kwargs["on_progress"] = notify
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(extractor, "extract", extract_with_pause)
+    monkeypatch.setattr(service, "_new_extractor", lambda: extractor)
+    payload = "采购需求报告\n一、项目概况\n项目名称：某服务采购项目\n采购方式：公开招标\n采购预算：100000元\n二、采购需求\n合同履行期限：一年"
+    job = service.submit("文字采购需求.txt", payload.encode("utf-8"), False, True)
+    try:
+        assert reached.wait(10)
+        assert job.public()["status"] == "running"
+        assert job.public()["progress"] == 35
+    finally:
+        proceed.set()
+    for _ in range(100):
+        row = service.db.get_job(job.id)
+        if row["status"] in {"done", "error"}:
+            break
+        time.sleep(0.05)
+    assert row["status"] == "done"
+    assert job.public()["progress"] == 100
+    assert job.result["fields"]["project_name"]["evidence"]
+    restored = Service(output_dir=service._output_dir, db=Database(service.db.db_path)).get(job.id)
+    assert restored.public()["progress"] == 100
+
+
+def test_progress_keeps_failure_below_completion(service: Service) -> None:
+    """读取损坏文件失败时保留已进入的读取阶段，不把失败渲染成完成。"""
+    from tender_extractor.web import Job
+    path = service._output_dir / "invalid.docx"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"invalid")
+    job = Job(id="failed-progress", filename="invalid.docx", use_llm=False, allow_non_tender=False)
+    service._run(job, path)
+    assert job.status == "error"
+    assert job.public()["progress"] == 5
 
 
 @pytest.fixture()
@@ -51,6 +109,56 @@ def _post(url: str, payload: dict) -> tuple[int, dict]:
         body = exc.read()
         exc.close()
         return exc.code, json.loads(body.decode("utf-8") or "{}")
+
+
+def _delete(url: str) -> tuple[int, dict]:
+    """通过真实 DELETE 请求验证记录删除，不使用前端夹具替代 API 行为。"""
+    request = urllib.request.Request(url, method="DELETE")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+def test_delete_requirement_removes_record_values_and_cache(server: str, service: Service) -> None:
+    """删除完成任务后详情与列表都不可恢复，项目与其他任务的确认值保留。"""
+    project = service.db.create_project("某采购项目")["id"]
+    for job_id in ("delete-one", "keep-one"):
+        service.db.create_job(job_id, "extract", "某需求.txt", project, False, False)
+        service.db.update_job(job_id, status="done", stage="完成")
+        service.db.save_field_values(job_id, project, [{"key": "project_name", "value": "某需求"}])
+    # 先读入内存缓存，避免只验证数据库删除而漏掉旧详情仍可访问的问题。
+    assert _get(f"{server}/api/jobs/delete-one")[0] == 200
+    status, data = _delete(f"{server}/api/jobs/delete-one")
+    assert status == 200 and data == {"deleted": "delete-one"}
+    assert "delete-one" not in service.jobs
+    assert service.get("delete-one") is None
+    assert service.db.list_field_values("delete-one") == []
+    assert service.db.list_field_values("keep-one")
+    assert service.db.get_project(project) is not None
+    assert _get(f"{server}/api/jobs/delete-one")[0] == 404
+    assert [item["id"] for item in _get(f"{server}/api/jobs")[1]["jobs"]] == ["keep-one"]
+    assert _delete(f"{server}/api/jobs/delete-one")[0] == 404
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_delete_requirement_rejects_active_job(server: str, service: Service, status: str) -> None:
+    """解析线程运行期间不允许删除，避免结果回写后出现孤立记录或误报成功。"""
+    service.db.create_job("active-delete", "extract", "某需求.txt", None, False, False)
+    service.db.update_job("active-delete", status=status)
+    code, data = _delete(f"{server}/api/jobs/active-delete")
+    assert code == 409 and "解析中" in data["error"]
+    assert service.db.get_job("active-delete") is not None
+
+
+def test_delete_requirement_rejects_compare_job(server: str, service: Service) -> None:
+    """需求删除入口只作用于抽取记录，比对模块保持现有功能边界。"""
+    service.db.create_job("compare-delete", "compare", "某比对", None, False, False)
+    service.db.update_job("compare-delete", status="done")
+    assert _delete(f"{server}/api/jobs/compare-delete")[0] == 400
+    assert service.db.get_job("compare-delete") is not None
 
 
 def test_project_api_crud(server):

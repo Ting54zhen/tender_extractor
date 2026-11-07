@@ -1,0 +1,97 @@
+/* 本页专属：左侧标签 + 右侧控件的设置表单 */
+h2.sec {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--ink);
+  margin: 26px 0 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+h2.sec:first-child {
+  margin-top: 0;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 236px) minmax(0, 1fr);
+  align-items: start;
+  font-size: 13px;
+}
+
+.form-grid>label {
+  padding: 10px 12px 10px 0;
+  color: var(--grey-700);
+  font-size: 13px;
+  border-bottom: 1px solid var(--grey-100);
+  line-height: 1.5;
+}
+
+.form-grid>label small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--grey-400);
+  margin-top: 2px;
+  line-height: 1.5;
+}
+
+.form-grid>div {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--grey-100);
+}
+
+.form-grid input[type="text"],
+.form-grid input[type="number"],
+.form-grid select {
+  width: 100%;
+  max-width: 520px;
+}
+
+.form-grid input[type="checkbox"] {
+  margin-top: 6px;
+}
+
+/* 「已覆盖」标记：与出厂默认不同才出现 */
+.ovv {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--amber);
+  background: var(--amber-soft);
+  border: 1px solid var(--amber-line);
+  vertical-align: 1px;
+}
+
+.ok-msg {
+  color: var(--green);
+  font-size: 13px;
+  display: none;
+}
+
+.ok-msg.show {
+  display: inline;
+}
+
+@media (max-width: 720px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-grid>label {
+    padding: 12px 0 2px;
+    border-bottom: none;
+  }
+
+  .form-grid>div {
+    padding: 0 0 10px;
+  }
+
+  .form-grid>div:first-of-type {
+    padding-top: 6px;
+  }
+}

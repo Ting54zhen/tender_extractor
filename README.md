@@ -95,7 +95,7 @@ DOCX 解析 → 文档类型校验（非招标/采购文件则提示并跳过）
 | `company.html` | 企业档案：资质 / 业绩 / 人员 / 证明材料 |
 | `settings.html` | 可视化设置：模型、复核、阈值、输出目录 |
 
-页面为内联 CSS/JS，不引用任何 CDN，可离线部署。
+页面使用 Vue 单文件组件，按 pages/components/composables/services/utils/styles 拆分，通过 npm + Vite 构建。沿用现有 CSS，不引用 CDN；Python 与 EXE 仅提供构建后的本地资源，终端用户无需 Node/npm。详情见 [前端说明](frontend/README.md)。
 
 ### 脚本与示例
 
@@ -156,6 +156,15 @@ DOCX 解析 → 文档类型校验（非招标/采购文件则提示并跳过）
 
 ### 2.1 一键启动（Windows）
 
+源码网页首次启动前，开发机安装 Node.js `^20.19.0 || >=22.12.0`，在根目录执行：
+
+```powershell
+npm --prefix frontend ci
+npm --prefix frontend run build
+```
+
+页面源码修改后重新构建并刷新；热更新开发用 `npm --prefix frontend run dev`（5173，API 代理到本机 Python 8765）。EXE 用户无需这些步骤。
+
 双击 `start.bat`，或在本目录执行：
 
 ```bat
@@ -184,7 +193,7 @@ start.bat test
 .venv\Scripts\python scripts\check_exe.py      :: 验收：独立目录启动 + 页面 + 数据落位
 ```
 
-exe 内嵌 `config/`、`frontend/`、`templates/compiled/`；运行后在 exe 同目录生成 `data/`（`tender.db`、结果文件、`web.log`），整个目录可直接拷给他人。启动日志同时写 `data/web.log`，双击后窗口一闪而过时用它排障。`start.bat` 菜单第 8 项可直接启动已打包版本。企业档案、投标书生成、图谱分析等全部功能在 exe 中同样可用；PDF 导出依赖目标机器的 LibreOffice 或 Word，缺转换器时页面会给安装指引。
+exe 内嵌 `config/`、`frontend/dist/`、`templates/compiled/`；运行后在 exe 同目录生成 `data/`（`tender.db`、结果文件、`web.log`），整个目录可直接拷给他人。启动日志同时写 `data/web.log`，双击后窗口一闪而过时用它排障。`start.bat` 菜单第 8 项可直接启动已打包版本。企业档案、投标书生成、图谱分析等全部功能在 exe 中同样可用；PDF 导出依赖目标机器的 LibreOffice 或 Word，缺转换器时页面会给安装指引。
 
 ### 2.2 安装
 

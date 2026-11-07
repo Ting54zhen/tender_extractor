@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 title 招标需求解析组件 - 快速启动
-setlocal
+Set-Location 'C:\Users\yuzukii\Desktop\tender_extractor'
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "ROOT=%~dp0"
