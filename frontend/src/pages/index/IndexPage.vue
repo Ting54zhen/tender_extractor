@@ -1,10 +1,11 @@
 <script>
 import AppShell from '../../components/layout/AppShell.vue';
 import DeleteConfirmDialog from '../../components/layout/DeleteConfirmDialog.vue';
+import ChatStream from '../../components/chat/ChatStream.vue';
 import { usePage } from './use_index_page.js';
 
 // 仅组合本页状态与显式组件；所有模板在构建时编译，不编译接口或文档文本。
-export default { components: { AppShell, DeleteConfirmDialog }, setup: usePage };
+export default { components: { AppShell, DeleteConfirmDialog, ChatStream }, setup: usePage };
 </script>
 
 <template>
@@ -46,7 +47,8 @@ export default { components: { AppShell, DeleteConfirmDialog }, setup: usePage }
             <!-- 提示层不参与布局也不接收鼠标事件，拖动时保持输入区尺寸与事件边界稳定。 -->
             <div class="drop-upload-hint" v-show="dragging" role="status"><strong>松开即可上传需求报告</strong><span>支持 .docx / .pdf / .txt · 不超过 50MB</span></div>
             <!-- 文本与文件二选一；上传文件时保留文字草稿，移除文件即可继续输入。 -->
-            <textarea ref="inputElement" id="requirement-text" class="requirement-input" rows="2" v-model="text" :disabled="!!file || busy" aria-label="采购需求内容" placeholder="输入或粘贴采购需求"></textarea>
+            <!-- 发送即对话：Enter 直接交给助手识别意图，Shift+Enter 换行。 -->
+            <textarea ref="inputElement" id="requirement-text" class="requirement-input" rows="2" v-model="text" :disabled="!!file || chatBusy" aria-label="采购需求内容" placeholder="输入或粘贴采购需求，也可以直接对助手下指令" @keydown.enter.exact.prevent="chatSend()"></textarea>
             <!-- 上传提示与已选文件使用同一固定占位，文件名长度不会撑开页面。 -->
             <div class="upload-slot">
             <div class="dropzone" id="drop" v-show="!file" role="button" tabindex="0" @click="$refs.uploadInput.click()" @keydown.enter.prevent="$refs.uploadInput.click()" @keydown.space.prevent="$refs.uploadInput.click()">
@@ -70,22 +72,23 @@ export default { components: { AppShell, DeleteConfirmDialog }, setup: usePage }
               <div class="seg-pill"><label><input type="radio" name="mode" value="full"
                     v-model="mode"><span>完整链路</span></label><label><input type="radio" name="mode" value="rules"
                     v-model="mode"><span>仅规则</span></label></div><label class="check"><input type="checkbox" id="force"
-                  v-model="force">强制抽取</label><span class="hintline" id="run-hint">{{ busy || progress.running ?
-                    '正在创建解析任务…' : canSubmit ? '准备就绪' : '输入需求或上传报告' }}</span><button class="btn primary start-extraction" id="run"
-                :disabled="!canSubmit || busy || progress.running" @click="startExtraction(false)" title="开始解析"
-                aria-label="开始解析">开始解析 <svg viewBox="0 0 24 24">
+                  v-model="force">强制抽取</label><span class="hintline" id="run-hint">{{ chatBusy ?
+                    '正在处理…' : canSubmit ? 'Enter 发送，或点击开始解析' : '输入需求或上传报告' }}</span><button class="btn primary start-extraction" id="run"
+                :disabled="!canSubmit || chatBusy" @click="chatSend()" title="发送给助手" aria-label="开始解析">开始解析 <svg viewBox="0 0 24 24">
                   <path d="M5 12h14M13 6l6 6-6 6" />
                 </svg></button>
             </div>
           </div>
-          <!-- 沿用原链接元素，让 Vue 事件继续匹配现有 CSS。 -->
+          <!-- 对话消息流：任务进度、结果摘要与待复核清单内联在会话里。 -->
+          <ChatStream v-if="chatMessages.length" :messages="chatMessages" :busy="chatBusy" :working="!!chatActionBusy" @act="(op, arg) => chatAct(op, arg)" />
+          <!-- 能力提示改为发给助手演示；报告上传仍走上方拖放区。 -->
           <div class="sugg-tabs" id="sugg-tabs"><button v-for="tab in suggestionTabs" :key="tab[0]" class="sugg-tab"
               :class="{ on: suggestionTab === tab[0] }" @click="suggestionTab = tab[0]">{{ tab[1] }}</button></div>
-          <div class="sugg-grid" id="sugg-grid"><a class="sugg-item" href="#" v-for="text in suggestionList" :key="text"
-              @click.prevent="$refs.uploadInput.click()"><svg viewBox="0 0 24 24">
+          <div class="sugg-grid" id="sugg-grid"><a class="sugg-item" href="#" v-for="sugg in suggestionList" :key="sugg"
+              @click.prevent="chatSend(sugg)"><svg viewBox="0 0 24 24">
                 <path d="M4 4v7a4 4 0 0 0 4 4h11" />
                 <path d="M15 11l4 4-4 4" />
-              </svg><span>{{ text }}</span></a></div>
+              </svg><span>{{ sugg }}</span></a></div>
         </section>
         <!-- 顶部确定性进度保留至解析完成，避免结果页跳动；模型耗时不用于伪造百分比。 -->
         <section v-if="view === 'detail'" class="card status show requirement-progress" id="status" aria-live="polite">

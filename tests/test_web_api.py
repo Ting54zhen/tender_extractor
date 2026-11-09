@@ -815,3 +815,88 @@ def test_find_soffice_falls_back_to_path(monkeypatch, tmp_path):
     )
     assert web._find_soffice() == fake
 
+
+# ---------------------------------------------------------------------------
+# 对话入口：POST /api/chat/intent（只分类意图，不执行动作、不产出事实值）
+# ---------------------------------------------------------------------------
+
+
+class _IntentClient:
+    """意图兜底用的假模型客户端，返回固定 JSON。"""
+
+    def __init__(self, reply: dict) -> None:
+        self.reply = reply
+
+    def chat_json(self, system: str, user: str, schema=None) -> dict:
+        return self.reply
+
+
+def test_chat_intent_rules_do_not_touch_model(server, service) -> None:
+    """规则命中的指令与需求正文直接返回，接口只回白名单意图。"""
+    status, data = _post(server + "/api/chat/intent", {"text": "帮我生成招标文件"})
+    assert status == 200
+    assert data == {"intent": "generate", "matched_by": "rule", "keyword": "生成招标文件"}
+
+    content = (
+        "某单位物业管理服务采购项目，预算120万元，服务期一年，"
+        "要求投标人具备相应服务能力，不接受联合体投标。"
+    )
+    status, data = _post(server + "/api/chat/intent", {"text": content})
+    assert status == 200
+    assert data["intent"] == "extract" and data["matched_by"] == "rule"
+
+
+def test_chat_intent_llm_fallback_is_whitelisted(server, service, monkeypatch) -> None:
+    """规则未命中的指令交由模型兜底；模型越界输出被丢弃返回 unknown。"""
+    import tender_extractor.web as web
+
+    monkeypatch.setattr(service, "health", lambda: {"available": True})
+    monkeypatch.setattr(
+        web, "build_llm_client", lambda settings: _IntentClient({"intent": "missing"})
+    )
+    status, data = _post(server + "/api/chat/intent", {"text": "帮我搞定一下那个文件"})
+    assert status == 200
+    assert data == {"intent": "missing", "matched_by": "llm", "keyword": ""}
+
+    monkeypatch.setattr(
+        web, "build_llm_client", lambda settings: _IntentClient({"intent": "伪造字段值"})
+    )
+    status, data = _post(server + "/api/chat/intent", {"text": "帮我搞定一下那个文件"})
+    assert status == 200
+    assert data["intent"] == "unknown"
+
+
+def test_chat_intent_rejects_blank_text(server) -> None:
+    status, data = _post(server + "/api/chat/intent", {"text": "   "})
+    assert status == 400
+    assert "text" in data["error"]
+
+
+def test_chat_intent_offline_short_command_returns_unknown(server, service, monkeypatch) -> None:
+    """模型不可用时短指令回落 unknown，由前端给出能力说明，不报错。"""
+    monkeypatch.setattr(service, "health", lambda: {"available": False})
+    status, data = _post(server + "/api/chat/intent", {"text": "帮我看看那个"})
+    assert status == 200
+    assert data["intent"] == "unknown"
+    assert data["matched_by"] == "fallback"
+
+
+def test_chat_intent_input_boundaries(server, service, monkeypatch) -> None:
+    """输入边界：非字符串、超长文本都明确 400，不进模型。"""
+    monkeypatch.setattr(service, "health", lambda: {"available": False})
+    status, data = _post(server + "/api/chat/intent", {"text": 123})
+    assert status == 400 and "text" in data["error"]
+    status, data = _post(server + "/api/chat/intent", {"text": "采购需求" * 600})
+    assert status == 400 and "2000" in data["error"]
+
+
+def test_chat_intent_classifier_failure_degrades(server, service, monkeypatch) -> None:
+    """分类组件异常时降级为 unknown（200），对话入口不中断、不执行动作。"""
+    def broken(text: str):
+        raise RuntimeError("模型挂了")
+
+    monkeypatch.setattr(service, "classify_chat_intent", broken)
+    status, data = _post(server + "/api/chat/intent", {"text": "查看解析结果"})
+    assert status == 200
+    assert data == {"intent": "unknown", "matched_by": "fallback", "keyword": "分类服务降级"}
+

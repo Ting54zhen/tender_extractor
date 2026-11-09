@@ -80,6 +80,12 @@ async function handle(req, res) {
   }
   if (url.pathname === '/api/jobs') return json({ jobs: (manyRequirements ? Array.from({ length: 16 }, (_, index) => extractionSnapshot('list-' + index)) : [extractionSnapshot()]).filter(item => !deletedJobs.has(item.id)) });
   if (url.pathname === '/api/extract') return json(extractionSnapshot(), 202);
+  // 对话入口意图桩：按关键词模拟规则层，供会话流回归使用。
+  if (url.pathname === '/api/chat/intent') {
+    const asked = String(data.text || '');
+    const intent = /帮助|你能/.test(asked) ? 'help' : /结果|字段/.test(asked) ? 'result' : /解析|采购|需求/.test(asked) ? 'extract' : 'unknown';
+    return json({ intent, matched_by: 'rule', keyword: '' });
+  }
   if (url.pathname === '/api/compare') return json(compareJob, 202);
   if (url.pathname.startsWith('/api/jobs/')) {
     const parts = url.pathname.split('/'), id = parts[3], action = parts[4];
@@ -331,6 +337,35 @@ async function main() {
     }
     await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   });
+  await run('对话入口：纯文本发送走意图分类并内联展示解析摘要', async () => {
+    extractionState = 'done';
+    await go('/?view=new');
+    await input('#requirement-text', '某单位物业管理服务采购项目需求正文');
+    await click('#run');
+    await waitDom(`document.querySelectorAll('.chat-msg').length >= 2`, '会话消息');
+    await waitDom(`document.querySelector('.chat-card .chat-stats')`, '结果摘要卡');
+    assert.equal(await evaluate(`document.querySelector('#requirement-text').value`), '');
+    assert.ok(requests.some(item => item.path === '/api/chat/intent'), '发送先做意图分类');
+    assert.ok(requests.some(item => item.path === '/api/extract'), '解析仍走原接口');
+    await shot('12-对话解析摘要');
+  });
+  await run('对话入口：查看结果与帮助指令直接在会话里回答', async () => {
+    await input('#requirement-text', '查看解析结果');
+    await click('#run');
+    await waitDom(`document.querySelectorAll('.chat-card .chat-stats').length >= 2`, '关联任务摘要');
+    await input('#requirement-text', '帮助');
+    await click('#run');
+    await waitDom(`document.body.textContent.includes('我可以在这里帮你完成这些事')`, '帮助回复');
+    assert.ok(await evaluate(`document.querySelector('.chat-evidence')?.textContent.includes('模型输出不作为事实')`), '证据与人工复核提示');
+  });
+  await run('对话边界：越界请求固定拒答、不执行动作、判定来源可见', async () => {
+    const before = requests.filter(item => item.path === '/api/extract').length;
+    await input('#requirement-text', '能不能写一首关于招标的诗');
+    await click('#run');
+    await waitDom(`document.body.textContent.includes('超出了本机招标需求解析助手的能力范围')`, '固定拒答文案');
+    assert.equal(requests.filter(item => item.path === '/api/extract').length, before, '越界不得创建解析任务');
+    assert.ok(await evaluate(`document.querySelector('.chat-via')?.textContent.includes('规则判定')`), '判定来源徽标');
+  });
   await go('/');
   await run('需求标题、搜索计数和切换状态布局稳定', async () => {
     manyRequirements = true;
@@ -382,27 +417,29 @@ async function main() {
     assert.equal(await evaluate(`document.querySelectorAll('.sb-nav .active').length`), 0);
     await go('/index.html?view=new'); assert.equal(await evaluate(`document.querySelectorAll('.sb-nav .active').length`), 0);
   });
-  await run('上传校验、移除文件和纯规则任务轮询按原契约工作', async () => {
+  await run('上传校验、移除文件和纯规则任务按原契约工作（对话内联结果）', async () => {
     await chooseFile('#file', '不支持.exe'); await waitDom(`document.querySelector('#error-card').innerText.includes('仅支持')`);
     await chooseFile('#file', '脱敏报告.docx'); await click('#file-clear');
     await waitDom(`document.querySelector('#run').disabled`);
     await chooseFile('#file', '脱敏报告.docx');
     await click('input[name="mode"][value="rules"]'); await click('#run');
-    await waitDom(`document.querySelector('#pane-fields tbody tr')`);
+    // 对话式入口：带文件直接解析，结果以内联摘要卡呈现，不再整页跳转。
+    const intentsBefore = requests.filter(item => item.path === '/api/chat/intent').length;
+    await waitDom(`document.querySelector('.chat-card .chat-stats')`);
     const request = requests.findLast(item => item.path === '/api/extract');
     assert.equal(new URLSearchParams(request.query).get('use_llm'), '0');
     assert.equal(request.body, '脱敏测试内容');
-    assert.equal(await evaluate(`document.querySelector('[role="progressbar"]').getAttribute('aria-valuenow')`), '100');
-    assert.equal(await evaluate(`document.querySelector('#requirement-text')`), null);
+    assert.equal(await evaluate(`document.querySelector('#requirement-text').value`), '');
+    assert.equal(requests.filter(item => item.path === '/api/chat/intent').length, intentsBefore, '带文件跳过意图分类');
   });
-  await run('文字解析跳转详情、真实阶段百分比和刷新恢复', async () => {
+  await run('文字解析内联展示真实阶段百分比，详情页刷新恢复', async () => {
     extractionState = 'running';
     await go('/?view=new'); await waitDom(`document.querySelector('#requirement-text')`);
     assert.equal(await evaluate(`document.querySelector('#run').disabled`), true);
     await input('#requirement-text', '   '); assert.equal(await evaluate(`document.querySelector('#run').disabled`), true);
     const content = '采购需求报告\n项目名称：某采购项目\n采购预算：100000元';
     await input('#requirement-text', content); await shot('05-新建文字解析'); await click('#run');
-    await waitDom(`location.search.includes('job=job-one') && document.querySelector('#status-percent')?.textContent === '35%'`);
+    await waitDom(`document.querySelector('.chat-card [role="progressbar"]')?.getAttribute('aria-valuenow') === '35'`, '对话进度卡 35%');
     const request = requests.findLast(item => item.path === '/api/extract');
     assert.equal(new URLSearchParams(request.query).get('filename'), '文字采购需求.txt'); assert.equal(request.body, content);
     assert.equal(await evaluate(`getComputedStyle(document.querySelector('.bar.determinate i')).animationName`), 'none');
@@ -419,7 +456,7 @@ async function main() {
     assert.equal(await evaluate(`document.querySelector('#requirement-text').disabled`), true);
     await click('#file-clear'); assert.equal(await evaluate(`document.querySelector('#requirement-text').value`), '保留的文字草稿');
     await chooseFile('#file', '报告优先.txt', '选中文件原文'); await click('#run');
-    await waitDom(`document.querySelector('#pane-fields tbody tr')`);
+    await waitDom(`document.querySelector('.chat-card .chat-stats')`);
     assert.equal(requests.findLast(item => item.path === '/api/extract').body, '选中文件原文');
   });
   await run('失败与不存在的详情保留错误且不伪报完成', async () => {

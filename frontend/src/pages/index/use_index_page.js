@@ -3,6 +3,7 @@ import { api, post } from '../../services/api.js';
 import { download, saveBlob } from '../../services/download.js';
 import { fmtSize } from '../../utils/format_size.js';
 import { useJobPolling } from '../../composables/use_job_polling.js';
+import { useChat } from './use_chat.js';
 import { formatters as reportFormatters } from '../../utils/formatters.js';
 
 /** IndexPage 的状态与业务动作；页面模板独立维护，不通过 DOM 反向收集字段值。 */
@@ -54,7 +55,7 @@ export function usePage() {
     if (!isFileDrag(event)) return;
     event.preventDefault(); resetDrag(); setFile(event.dataTransfer.files[0]);
   }
-  const error = ref(""), busy = ref(false), job = ref(null), result = ref(null), report = ref(""), pane = ref("fields");
+  const error = ref(""), job = ref(null), result = ref(null), report = ref(""), pane = ref("fields");
   const health = ref({ available: false, checking: true }), bidResult = ref(null), riskResult = ref(null), actionBusy = ref("");
   const suggestionTab = ref("common"), formatters = reportFormatters;
   const suggestionTabs = [["common", "常用"], ["build", "生成"], ["check", "核对"], ["keep", "归档"]];
@@ -90,21 +91,9 @@ export function usePage() {
     file.value = value; error.value = "";
   }
   function saveProject() { try { if (projectId.value) localStorage.setItem("tender.currentProject", projectId.value); else localStorage.removeItem("tender.currentProject"); } catch { /* 无持久化权限时仍允许本次选择。 */ } }
-  async function startExtraction(retryForce) {
-    if (!canSubmit.value) { error.value = "请输入采购需求或选择一份需求报告"; return; }
-    if (busy.value || progress.running) return;
-    stop(); resultSequence += 1; result.value = null; bidResult.value = null; riskResult.value = null; error.value = ""; busy.value = true;
-    try {
-      // 文字作为 UTF-8 TXT 原文上传，复用相同的证据核验；原文不放进 URL。
-      const input = file.value || new File([text.value.trim()], '文字采购需求.txt', { type: 'text/plain;charset=utf-8' });
-      if (input.size > 50 * 1024 * 1024) throw new Error('需求内容超过 50MB 上限');
-      const query = new URLSearchParams({ filename: input.name, use_llm: mode.value === "full" ? "1" : "0", allow_non_tender: force.value || retryForce ? "1" : "0" });
-      if (projectId.value) query.set("project_id", projectId.value);
-      const value = await api("/api/extract?" + query, { method: "POST", body: input });
-      // 服务端创建任务成功后跳转；刷新详情仍能恢复后台任务。
-      location.assign('/?job=' + encodeURIComponent(value.id));
-    } catch (err) { error.value = err.message; } finally { busy.value = false; }
-  }
+  // 对话式入口：输入框发送即交给意图识别（/api/chat/intent 只分类），
+  // 动作仍走既有接口；带文件时直接解析，纯文本内容默认创建解析任务。
+  const { messages: chatMessages, chatBusy, actionBusy: chatActionBusy, activeJob, send: chatSend, act: chatAct } = useChat({ mode, force, projectId, file, text });
   async function openJob(id) {
     try { const value = await api("/api/jobs/" + encodeURIComponent(id)); job.value = value; progress.job = value; progress.percent = Number(value.progress) || 0; if (["queued", "running"].includes(value.status)) await start(value); else if (value.status === "error") error.value = value.error || "该任务执行失败"; else await loadResult(value); }
     catch (err) { error.value = "载入任务失败：" + err.message; }
@@ -176,6 +165,6 @@ export function usePage() {
     const id = query.get('job'); if (id) { openJob(id); return; }
     if (view.value === 'list') loadJobs();
   });
-  return { deleting, deleteOpen, deleteError, openDelete, deleteRequirement, inputElement, enterDrag, overDrag, leaveDrag, dropFile, view, text, jobs, listLoading, filter, search, filters, filteredJobs, canSubmit, jobLabels, detailJob, percent, loadJobs, projectName, file, dragging, mode, force, projectId, projects, error, busy, job, result, report, pane, health, healthText, bidResult, riskResult, actionBusy, suggestionTab, suggestionTabs, suggestionList, panes, statusLabels, sourceLabels, priorityLabels, reviewItems, stats, resultMeta, formatters, progress, fmtSize, loadHealth, setFile, saveProject, startExtraction, runAction, exportPdf, downloadBid, downloadGraph };
+  return { deleting, deleteOpen, deleteError, openDelete, deleteRequirement, inputElement, enterDrag, overDrag, leaveDrag, dropFile, view, text, jobs, listLoading, filter, search, filters, filteredJobs, canSubmit, jobLabels, detailJob, percent, loadJobs, projectName, file, dragging, mode, force, projectId, projects, error, job, result, report, pane, health, healthText, bidResult, riskResult, actionBusy, suggestionTab, suggestionTabs, suggestionList, panes, statusLabels, sourceLabels, priorityLabels, reviewItems, stats, resultMeta, formatters, progress, fmtSize, loadHealth, setFile, saveProject, chatMessages, chatBusy, chatActionBusy, activeJob, chatSend, chatAct, runAction, exportPdf, downloadBid, downloadGraph };
 
 }

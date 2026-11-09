@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
+from .chat import MAX_TEXT_CHARS, ChatIntent, classify_intent
 from .doc_generator import generate_tender_document
 from .field_scopes import axis_options, resolve
 from .llm_client import build_llm_client
@@ -650,6 +651,23 @@ class Service:
             self._health = data
             self._health_at = now
         return data
+
+    def classify_chat_intent(self, text: str) -> ChatIntent:
+        """对话入口的意图识别：规则优先，模型只兜底分类。
+
+        模型仅在健康检查通过时才参与，且超时压到交互可接受的 30s；
+        分类结果被约束在白名单内，模型不产出任何事实值，证据约束
+        仍由抽取链路负责。
+        """
+        settings = self.settings().get("llm", {})
+        client = None
+        if self.health().get("available"):
+            try:
+                timeout = min(int(settings.get("timeout_seconds", 180)), 30)
+                client = build_llm_client({**settings, "timeout_seconds": timeout})
+            except Exception:  # noqa: BLE001 - 配置异常时退回纯规则
+                client = None
+        return classify_intent(text, client)
 
     # ------------------------------------------------------------------
     # 填写工作台：字段分组与招标文件生成
@@ -1557,6 +1575,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_settings_save()
         if parsed.path == "/api/company":
             return self._handle_company_save()
+        if parsed.path == "/api/chat/intent":
+            return self._handle_chat_intent()
         if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/generate"):
             return self._handle_generate(parsed.path)
         if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/confirm"):
@@ -2069,6 +2089,27 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             return self._send_json({"error": f"建议起草失败：{exc}"}, 500)
         return self._send_json(data)
+
+    def _handle_chat_intent(self) -> None:
+        """对话入口意图识别：POST /api/chat/intent {"text": "..."}。
+
+        只做意图分类，不执行任何动作；前端拿到意图后调用既有接口，
+        执行结果（含证据）仍来自抽取链路，模型不参与事实产出。
+        """
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json({"error": "请求体不是合法 JSON 对象"}, 400)
+        text = body.get("text")
+        # 输入边界：只收一条指令/一小段文字，避免把整篇文档塞进分类接口。
+        if not isinstance(text, str) or not text.strip():
+            return self._send_json({"error": "text 必须是非空字符串"}, 400)
+        if len(text.strip()) > MAX_TEXT_CHARS:
+            return self._send_json({"error": f"text 不能超过 {MAX_TEXT_CHARS} 字符"}, 400)
+        try:
+            intent = self.service.classify_chat_intent(text)
+        except Exception:  # noqa: BLE001 - 分类组件失败降级，不让对话入口报错中断
+            intent = ChatIntent(intent="unknown", matched_by="fallback", keyword="分类服务降级")
+        return self._send_json(intent.to_dict())
 
     def _handle_analyze(self, path: str) -> None:
         """知识图谱风险分析：废标预警 / 符合性自查 / 评分点材料映射。"""
