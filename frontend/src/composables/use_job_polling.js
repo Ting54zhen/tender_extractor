@@ -10,6 +10,17 @@ import { api } from '../services/api.js';
       clearTimeout(timer); clearInterval(tick);
       progress.running = false;
     }
+    /** 服务端 elapsed 按任务创建时间计算，是切页恢复与浏览器节流后唯一可信的基准。
+     *  每次轮询都校准本地起点，避免累计漂移；缺有效值时保留已有基准，不让读秒跳回 0。 */
+    function syncElapsed(job) {
+      const elapsed = Number(job?.elapsed);
+      if (!Number.isFinite(elapsed) || elapsed < 0) {
+        if (!startedAt) startedAt = Date.now();
+        return;
+      }
+      startedAt = Date.now() - elapsed * 1000;
+      progress.elapsed = elapsed.toFixed(1);
+    }
     async function start(job) {
       stop();
       const current = generation;
@@ -17,15 +28,14 @@ import { api } from '../services/api.js';
       progress.percent = Number(job.progress) || 0;
       progress.running = true;
       progress.stage = job.stage || "处理中";
-      // 任务公开接口通常返回 elapsed 而不返回 created_at，刷新后从服务端耗时继续计时。
-      startedAt = job.created_at ? Number(job.created_at) * 1000 : Date.now() - (Number(job.elapsed) || 0) * 1000;
-      if (!Number.isFinite(startedAt) || startedAt <= 0) startedAt = Date.now();
+      syncElapsed(job);
       tick = setInterval(() => { progress.elapsed = Math.max(0, (Date.now() - startedAt) / 1000).toFixed(1); }, 100);
       async function poll() {
         try {
           const data = await api("/api/jobs/" + encodeURIComponent(job.id));
           if (current !== generation) return;
           progress.job = data;
+          syncElapsed(data);
           // 百分比由后端阶段回传；不按计时器虚增，兼容未提供进度的旧任务。
           progress.percent = ['done', 'skipped'].includes(data.status) ? 100 : Math.max(progress.percent, Math.min(99, Number(data.progress) || 0));
           progress.stage = data.stage || "处理中";

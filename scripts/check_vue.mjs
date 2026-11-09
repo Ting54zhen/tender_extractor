@@ -16,11 +16,11 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const results = [], requests = [], events = [];
 let chrome, ws, server, profile, base, previewCalls = 0, lastGenerated = null, previewMode = '', lastSettings = null, lastCompany = null;
 // 运行状态由夹具明确切换，验证百分比、刷新恢复和错误态，避免使用真实模型。
-let extractionState = 'done';
+let extractionState = 'done', jobElapsed = 1.2;
 const deletedJobs = new Set();
 let manyRequirements = false, rejectDelete = false;
 function extractionSnapshot(id = 'job-one') {
-  return { ...extractJob, id, status: extractionState, progress: extractionState === 'running' ? 35 : extractionState === 'error' ? 65 : 100,
+  return { ...extractJob, id, elapsed: jobElapsed, status: extractionState, progress: extractionState === 'running' ? 35 : extractionState === 'error' ? 65 : 100,
     stage: extractionState === 'running' ? '规则抽取完成，正在处理模型补缺' : extractionState === 'error' ? '失败' : '完成', error: extractionState === 'error' ? '模拟解析失败' : '' };
 }
 let templates = [{ id: 'builtin-service', name: '某服务类模板', builtin: true, is_default: true, category: 'service', method: 'open', placeholders: ['项目名称', '采购预算', '采购标的', '未知位置'], unmapped: ['未知位置'], placeholder_count: 4 }];
@@ -192,6 +192,39 @@ async function main() {
     await input('.field.custom [data-input]', '卡片修改值'); await go('/fill?job=job-one'); await waitDom(`document.querySelector('[data-g="custom"]')`); await click('[data-g="custom"]');
     assert.equal(await evaluate(`document.querySelector('.field.custom [data-input]').value`), '卡片修改值');
     await go('/fill?job=job-other'); await waitDom(`document.querySelector('#scopeMethod option[value="open"]')`); assert.equal(await evaluate(`localStorage.getItem('tender.customFields.job-other')`), null);
+  });
+  await go('/fill?job=job-one'); await waitDom(`document.querySelectorAll('.field[data-key]').length === 2`);
+  await run('切页返回保留字段编辑值、AI 建议与预览面板开合', async () => {
+    await waitDom(`!document.querySelector('#btnSuggest').disabled`);
+    await input('[data-key="project_name"] [data-input]', '跨页保留标记');
+    await waitDom(`(localStorage.getItem('tender.edits.job-one') || '').includes('跨页保留标记')`);
+    await click('#btnSuggest'); await waitDom(`(localStorage.getItem('tender.suggestions.job-one') || '').includes('人工确认后采用')`);
+    await evaluate(`(() => { if (document.querySelector('#previewPane').hidden) document.querySelector('#btnPreview').click(); })()`);
+    await waitDom(`!document.querySelector('#previewPane').hidden`);
+    await go('/fill?job=job-one'); await waitDom(`document.querySelectorAll('.field[data-key]').length === 2`);
+    assert.equal(await evaluate(`document.querySelector('[data-key="project_name"] [data-input]').value`), '跨页保留标记');
+    assert.equal(await evaluate(`!document.querySelector('#previewPane').hidden`), true);
+    assert.equal(await evaluate(`(localStorage.getItem('tender.suggestions.job-one') || '').includes('人工确认后采用')`), true);
+  });
+  await run('预览适应宽度与 100% 切换，缩放模式跨页保留', async () => {
+    await waitDom(`document.querySelector('#paperFit')`);
+    if (!(await evaluate(`document.querySelector('#paper').style.transform`))) await click('#btnFitPreview');
+    await waitDom(`document.querySelector('#paper').style.transform.includes('scale(')`);
+    assert.ok(parseInt(await evaluate(`document.querySelector('#paperFit').style.width`), 10) > 0);
+    await click('#btnFullPreview');
+    assert.equal(await evaluate(`document.querySelector('#paper').style.transform`), 'scale(1)');
+    assert.equal(await evaluate(`document.querySelector('#btnFullPreview').classList.contains('primary')`), true);
+    await go('/fill?job=job-one'); await waitDom(`document.querySelector('#paperFit')`);
+    assert.equal(await evaluate(`document.querySelector('#btnFullPreview').classList.contains('primary')`), true);
+    await click('#btnFitPreview'); await waitDom(`document.querySelector('#btnFitPreview').classList.contains('primary')`);
+  });
+  await run('切页返回读秒按服务端 elapsed 校准，不归零', async () => {
+    extractionState = 'running'; jobElapsed = 42.5;
+    await go('/?job=job-one');
+    await waitDom(`parseFloat(document.getElementById('status-elapsed')?.textContent || '0') >= 42`);
+    await go('/templates'); await go('/?job=job-one');
+    await waitDom(`parseFloat(document.getElementById('status-elapsed')?.textContent || '0') >= 42`);
+    extractionState = 'done'; jobElapsed = 1.2;
   });
   await go('/templates'); await waitDom(`document.querySelector('.tpl-card')`);
   await run('模板上传、设默认、重命名、预览和删除回退', async () => {

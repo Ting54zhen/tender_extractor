@@ -1,0 +1,11 @@
+前端第三方资源说明
+
+Vue 3.5.45，MIT License，来源：https://www.npmjs.com/package/vue
+生产构建包含 Vue 的浏览器运行时代码；完整许可随附于 VUE-LICENSE.txt。
+Vue 模板仅在开发机编译，浏览器不运行 npm，不向 npm 下载运行资源。
+
+Vite 8.3.6 和 @vitejs/plugin-vue 6.0.10 均为 MIT 许可的开发工具，
+不会作为应用服务器运行。构建生成的 modulepreload 辅助代码来自 Vite，
+对应完整许可（含其分发包的依赖声明）保存在 VITE-LICENSE.txt。
+完整依赖版本、来源和完整性摘要见 package-lock.json；
+各开发依赖的许可证保留在 npm 安装目录。

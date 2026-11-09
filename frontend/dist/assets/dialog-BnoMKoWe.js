@@ -1,0 +1,1 @@
+function e(e,t=!0){let n=document.getElementById(e);n&&(t&&!n.open&&n.showModal(),!t&&n.open&&n.close())}export{e as t};

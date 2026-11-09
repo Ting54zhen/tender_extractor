@@ -547,26 +547,6 @@ ollama list        # 需要 qwen2.5:7b-instruct-q4_K_M 与 qwen2.5:1.5b-instruct
 
 - LLM 抽取合并为单次全量调用（2026-11-09）：在「保留全量 LLM 重抽 + 不并发」前提下，把原本逐组 3 次串行调用（`basic/scoring/contract`，`commercial` 槽位因 `fields.json` 无对应分组而长期为空跑）合并成 1 次，并真正覆盖全部 53 字段——含原先仅由规则层出的 `party/award/inquiry` 约 18 个字段。`llm_extract.build_messages`/`select_context` 支持 `group=None` 的合并模式（用全部章节并集 `ALL_GROUP_SECTIONS`、标题「全部字段」、并要求模型只回有值字段以省生成 token）；`pipeline._run_llm` 改为一次 `extract_group(client, doc, None, all_fields, max(char_budget, 6000))`；`config/settings.json` 的 `num_ctx` 6144→12288、`num_predict`/`max_tokens` 2048→4096 以容纳单次大 prompt。预期：调用次数 3→1，prefill 与往返少 2 次，总 token 低于原 3×3500，且做到真正全量。`tests/test_llm_pipeline.py` 的 groups 键断言由 `basic` 改为 `all`；全量 176 项全绿、0 lint。注：单次大 prompt 对 7B 小模型的抽取精度与是否漏字段尚未用真实样本实测，且全量耗时尚未实测（依赖本地 Ollama 是否在线）。
 
-**下一步（优先级从高到低）：**
-
-1. **结构化附表人工确认值同步**：`doc_generator._fill_document_tables(tpl, result)` 只取 `result.structured`、不接收 `overrides`，填写页修改的标的清单／商务要求不进入成稿附表。本次又查到更深一层：`procurement_target_list`、`star_clauses_summary` 在 `fields.json` 里 `template` 为空，而 `fill.html` 的 `collectValues()` 只提交有 `template` 的字段，这类结构化人工值根本没传到后端。启动条件：先写复现测试（改标的清单 → generate → 断言附表值），再同时定前端提交口径与填表函数接收 overrides；不改 `/api/*` 路径。影响生成结果正确性，优先于其他前端项。
-2. **表格画像第二期：本地 LLM 兜底判表**（本次 C 方案剩余部分）：第一期只做形态/值特征规则层，真实样本里「项目 | 内容」形式的项目基本情况表仍判 `unknown`。启动条件：先定「仅低置信表才调模型」的触发阈值，模型给出的列角色必须过值类型复核与 `block_id` + `quote` 证据校验，不通过就落 `unmapped_tables`；`--no-llm` 行为不得变化，纯规则链路仍要完整可用。
-3. **未映射表的人工补录入口**：`table_profiles` / `unmapped_tables` 已进结果 JSON 与审核报告，但填写页还不能把未映射的表/列认领成字段或附表。启动条件：先定交互口径（认领为自定义字段 / 映射到已有字段），再改 `/fill` 与 `/confirm`。
-4. **脱敏样本补充**（`samples/`）：每类内置模板至少一份，供演示、回归评测与首轮试用前自检。启动条件：按 `samples/README.md` 脱敏标准取材；计划书 8.1 已排在六周计划第 1—2 周，是外部验证的前置条件。样本还需包含至少一个抽取值为空的字段，才能实机验证 AI 建议条跨页恢复（当前只能验证暂存往返）。
-5. **浏览器回归剩余人工项**：`scripts/check_browser.mjs` 已覆盖 27 项自动化交互，任务书第 9 节仍需人工或额外素材：上传错误文件（.pdf、空 .docx、超 50MB、无占位符）四种提示、删除默认模板后自动回退、上传→设默认→切换模板→生成整条链路、点「生成并下载」后用 Word 确认自定义字段与 8 张附表、三个旧功能（全部采纳 AI 值 / AI 起草 / 标的清单导入）与 P0-1、P0-2 的实机复现。启动条件：准备脱敏样本与可打开的 Word；截图归档到 PR。
-6. **预览同步性能达标**：实机实测「改字段 → 预览可见」约 4.6s（800ms debounce + compiled docx 解析 + 前端渲染 20 表 / 4.3 万字），任务书第 9 节要求 800ms 内。启动条件：先分别计时 `preview.build_preview` 与 `TenderPreview.render`，再决定是否按 `template_id + mtime` 缓存模板解析结果；复测以 `scripts/check_browser.mjs` 打印的「实测 ms」为准。
-7. **填写值服务端持久化**：本次修复后普通字段与自定义字段都只在浏览器 `localStorage` 按 jobId 暂存，换设备、换浏览器或清缓存仍会丢；后端 `field_values` 表、`/api/jobs/{id}/confirm` 与 `Service.save_confirmed_fields` 已存在但前端从未接入，`/fields` 也只回抽取值。启动条件：先定「确认值覆盖抽取值」的展示口径与状态标记（避免污染 `latest_field_values()` 的历史建议），再让前端 debounce 自动 POST `/confirm`、`/fields` 合并本 job 确认值；不改 API 字段结构。
-8. **预览样式归一化复核**：模板段落样式名是 `null3`，现按「第X章 / 一、 / 1.」文本特征判断层级；换一套章节结构不同的模板要重新验证 `preview._style_of()`。
-9. **工程类模板**：需要独立字段体系（工程量清单、通用/专用合同条款），现有 53 字段覆盖不了。v0.3 已按业务类型补工程类专属字段（生成时写入文末「补充条款」），但正文合同章与工程量清单附表仍依赖先拿到工程类范本原件并单独设计模板。
-10. **评标办法生成器**：评分细则初稿。依赖合规审查已有的判定口径（评分项不得含倾向性）。
-11. **多标段 / 分包识别**：`platform_adapter` 目前固定输出单包 `P1`。
-12. **测试数量口径统一**：本文第一节写 111 项 / 16 文件、`DEPLOYMENT.md` 第七节写 99 项，本节已按当前基线写 176 项 / 23 文件，计划书仍写 168 项 / 22 文件；全量长跑时 Web 接口用例偶发 `WinError 10053`（单独复跑通过、重跑全量全绿）也应在三处口径中说明。启动条件：下一次全量测试后一并更新文档，不动代码。
-13. **比对页任务恢复与计时基准**（可选）：`projects.js` 会给 compare 任务生成 `/compare.html?job=<id>` 链接，但 `compare.html` 不读取该参数，点开进行中比对任务只显示空页；其 `beginTicking()` 也仍用页面本地时间。启动条件：决定支持比对任务跨页恢复时，一并复用本次 `syncElapsed()` 方案；当前不影响首页需求解析链路。
-14. **合规审查 v2**（可选）：规则可配置化（从 `config/compliance.json` 读取）、误报反馈闭环、前端展示命中项。当前规则写在代码里，新增类别需改代码并发版。
-15. **通用栏目进字段契约**：`是否允许进口产品 / 核心产品 / 价格扣除 / 分项权重 / 付款方式` 目前只能走「补充条款」，要真正填进品目表与标的清单，需在 `fields.json` 新增字段、补模板表格渲染与证据规则。属抽取契约变更，先确认再动。
-16. **历史值 / AI 建议采纳后预览不刷新**（可选）：`fill.html` 的 `use-hist`、`use-sugg` 两个分支改完 `state` 只调 `updateProgress()`，没走 `schedulePreview()`；本次为修持久化补了 `saveState()`，预览仍要等下一次其他操作才更新。启动条件：确认预览 debounce 口径后给两处补 `schedulePreview()` 并加回归断言。
-17. **预览缩放可读性人工确认**（可选）：L2 在 1440px 下缩放比约 0.52，12pt 显示约 6pt；已提供栏内「100%」切换，但真实填写时是否够用需试用判断。启动条件：首轮试用记录用户是否频繁切 100%，再决定是否调整默认比例或增加中间档。
-18. **全量 LLM 计时与 <120s 验收 + 合并精度实测**：调用次数已从 3→1（合并为单次全量，且真正覆盖 53 字段），但 <120s 仍取决于本地模型（qwen2.5:7b q4）单请求延迟。启动条件：跑一次真实样本全量 `extract_document(use_llm=True)` 记录 `audit.timing.llm_ms`，同时核对合并大 prompt 下 7B 是否漏字段/精度下降（与改造前分组建模结果对比）；若仍超预算或精度下滑，需在「规则优先只补缺口字段（降低 LLM 调用次数）」与「并发独立组调用」之间二选一，二者此前均被否决，需重新确认范围。
 - Vue 多页面迁移：七个页面分别挂载 Vue，保留原 URL / `.html` 别名、查询参数与全部 `/api/*` 契约；公共导航、字段卡片、结构化预览改为组件，全部既有 CSS 保留。最初本地全局脚本方案已被下述 npm + Vite 单文件组件方案替代；不使用 CDN、Vue Router、Pinia 或大型组件库。
 - Vue 浏览器回归：`node scripts/check_vue.mjs` 19/19 通过（本机 HTTP 夹具 + 真实 Chrome，零 npm 包）；覆盖七页与别名、跨分组修改 / 清空、金额字符串、建议人工采纳、标的导入、预览合并表格 / 跨组定位 / 旧响应丢弃、自定义字段持久化 / 任务隔离、模板管理、设置 / 档案 / 项目、解析结果安全转义、上传 / 移除 / 轮询和比对 multipart 请求。补充用例发现并修复首页模板引用与 `file` 状态同名导致的上传状态冲突；19 项全绿且无外部资源请求 / 浏览器异常，截图落 `data/vue-browser-check/`（不入库）。
 - Vue 真实后端联调：`TENDER_CHECK_URL` 指向隔离源码服务、`TENDER_SAMPLE` 指定合成脱敏报告后，`node scripts/check_browser.mjs` 22/22 通过；纯规则解析、三套真实模板、预览 20 表 / 97 占位符片段、字段同步 / 定位、自定义字段与响应式布局均已复验。修正旧验收脚本以真实 input 事件驱动 Vue，并等 DOM 更新 / 浏览器退出；本次「改字段 → 预览可见」约 1.5s，800ms 仍仅为防抖间隔。
@@ -577,17 +557,27 @@ ollama list        # 需要 qwen2.5:7b-instruct-q4_K_M 与 qwen2.5:1.5b-instruct
 - npm 打包准备：已实际调用 build_exe.build_frontend() 与 collect_data()，确认 build/check 通过且仅收集 dist；check_exe 改为自动发现散列资源、校验七入口 / 许可 / node_modules 隔离。仅验证打包准备，本轮未重建或验收新版 EXE；AGENTS、README、前端任务书及本说明已同步新架构与运行步骤。
 - 全量 Python 测试：`python -m pytest tests -q --tb=short`（使用可用 Python 解释器及 `.venv/Lib/site-packages`）167 项 / 23 个文件全部通过，较上一轮新增 2 项；收集数已复核。首轮沙箱内出现一次本机连接被系统中止，沙箱外完整重跑通过，未修改断言。现有 pytest 插件与 re.split 弃用警告保留。
 
+- 对接 `yc` 分支 Vue 前端并保留本地引擎更新（2026-11-09）：以 `main`(91feaf6) 为基线并入 `origin/yc`(e78d772，84 文件 / +9273 −4958) 的 Vue 3.5.45 + Vite 8.3.6 多页面前端；合并前先把本地 18 个未提交文件落到临时分支 `merge/yc-vue-frontend` 保底。五处冲突按「引擎以本地更新为准、前端以 yc 版为准」处理：`pipeline.py` 同位置同时保留本地 `audit.timing` 计时埋点与 yc 的 `on_progress` 阶段回调；`tests/test_web_api.py` 两侧新增用例全留（孤儿任务对账 4 项 + 需求删除 4 项）；`DEVELOPMENT.md` 两侧已完成项合并不丢；`fill.html` / `index.html` 取 yc 挂载壳、本地修复另行移植。Web 层保留 Vue 运行所必需的 `STATIC_DIR → frontend/dist`、`DELETE /api/jobs/{id}`、`progress` 字段与 `is_relative_to` 目录穿越修复。`AGENTS.md` 第②条按用户确认改为「Web 资源本机分发」并授权 Vue + npm + Vite 例外；修掉 `start.bat` 里同事本机绝对路径的 PowerShell 语句，恢复 `setlocal`。
+- 本地四项前端修复移植进 Vue（2026-11-09）：① `use_job_polling.js` 新增 `syncElapsed()`，每次轮询用服务端 `elapsed` 校准读秒起点并对无效值兜底（后端 `Job.public()` 只返回 `elapsed`，原 `job.created_at` 分支永不生效）；② `use_fill_page.js` 按 jobId 暂存／恢复 `edits`、`suggestions`、`previewOpen`，统一挂在 `payload` watch 上，采纳建议后删对应键防复活——Vue 的 `payload` watch 天然覆盖所有改值路径，旧版「历史值 / AI 建议采纳后预览不刷新」一项随之消失；③ `FillPreviewPane.vue` 移植 L2 预览缩放（适应宽度 / 100%、`paper-fit` 占位、`ResizeObserver` 重算）并暂存缩放模式，CSS `.paper-fit` 由 git 自动合并进 `src/styles/preview.css`；④ `.gitignore` 加例外放行 `frontend/dist/`，`npm ci --ignore-scripts` + `npm run build` + `npm run check` 通过（7 入口 / 23 本地资源 / 33 个产物文件入库），Python 模式与 exe 不再缺构建产物。`scripts/check_vue.mjs` 新增 3 组断言（32→35 项），首轮即抓出并修复「`load()` 异步赋值触发 `payload` watch、把空 edits 覆盖回 localStorage」的真实 bug——恢复提前到第一个 `await` 之前并加 `editsReady` 闸门。验证：全量 `pytest` 187 项全绿、`check_vue.mjs` 35/35、`npm run check` 通过、`read_lints` 0 问题。未做：exe 未重建、`check_browser.mjs` 真实后端联调未跑、临时分支未推送。
+
 **下一步（优先级从高到低）：**
 
-1. **npm/Vue 版 exe 发布验收**：多页面构建、需求列表 / 新建 / 详情及阶段百分比已完成，现有 EXE 仍是此前版本。启动条件：需要分发时先在 frontend 执行 npm ci，再运行 scripts/build_exe.py（自动 build/check）、scripts/check_exe.py（当前 18 项）及默认 EXE 模式的 scripts/check_browser.mjs；必须在空目录确认七入口、散列资源、MIT 许可及源码隔离，并复验文字 / 报告创建后跳转详情、真实本机模型等待期间百分比保持、完成结果 / 跳过 / 失败态。
-2. **浏览器回归剩余人工项**：真实源码服务 22 项与 Vue 夹具 32 项自动化已通过（含自动高度 / 拖放提示 / 上传与状态筛选布局稳定、需求删除与项目美化弹窗）；真实模板的错误文件提示（.pdf、空 .docx、超 50MB、无占位符）、上传→设默认→切换模板→生成整条链路、Word 检查自定义字段与 8 张附表仍需验收。模板删除回退、建议采纳 / 标的导入、跨组编辑 / 清空已由夹具覆盖，真实成稿还需核对。启动条件：准备脱敏报告 / 模板与可打开的 Word，截图落 `data/`。
-3. **预览同步性能达标**：Vue 源码联调的「改字段 → 预览可见」实测约 1.5s（此前原生前端 exe 验收约 4.6s），尚未达到端到端 800ms 目标；800ms 防抖本身已占满该目标。启动条件：先分别计时 `preview.build_preview` 与 Vue 渲染，再评估防抖间隔及按 `template_id + mtime` 缓存解析结果；复测以 `scripts/check_browser.mjs` 的实测值为准。
-4. **自定义字段服务端持久化**：目前仅 `localStorage` 按 jobId 暂存，换设备会丢。启动条件：确定 `storage.py` 表结构后加自定义字段表，并让 `/fields` 直接回传。
-5. **预览样式归一化复核**：模板段落样式名是 `null3`，现按「第X章 / 一、 / 1.」文本特征判断层级；换一套章节结构不同的模板要重新验证 `preview._style_of()`。
-6. **工程类模板**：需要独立字段体系（工程量清单、通用/专用合同条款），现有 53 字段覆盖不了。v0.3 已按业务类型补工程类专属字段（生成时写入文末「补充条款」），但正文合同章与工程量清单附表仍依赖先拿到工程类范本原件并单独设计模板。
-7. **评标办法生成器**：评分细则初稿。依赖合规审查已有的判定口径（评分项不得含倾向性）。
-8. **多标段 / 分包识别**：`platform_adapter` 目前固定输出单包 `P1`。
-9. **脱敏样本补充**（`samples/`）：每类模板至少一份，供回归评测。
-10. **合规审查 v2**（可选）：规则可配置化（从 `config/compliance.json` 读取）、误报反馈闭环、前端展示命中项。当前规则写在代码里，新增类别需改代码并发版。
-11. **通用栏目进字段契约**：`是否允许进口产品 / 核心产品 / 价格扣除 / 分项权重 / 付款方式` 目前只能走「补充条款」，要真正填进品目表与标的清单，需在 `fields.json` 新增字段、补模板表格渲染与证据规则。属抽取契约变更，先确认再动。
-
+1. **重建 npm/Vue 版 exe 并验收**：`frontend/dist/` 已是 Vue 版，但 `dist/招标需求解析.exe` 仍是旧原生前端，双击会得到旧页面，交付物不一致。启动条件：`npm --prefix frontend ci` → `python scripts/build_exe.py`（自动 build/check）→ `python scripts/check_exe.py`（18 项）→ 空目录跑默认 EXE 模式 `node scripts/check_browser.mjs`；确认七入口、散列资源、MIT 许可与源码隔离，并复验文字 / 报告创建后跳转详情、真实模型等待期间百分比保持、完成 / 跳过 / 失败态。
+2. **构建产物同步口径**：`frontend/dist/` 已入库，今后改任何 `frontend/src/**` 必须重新 `npm run build` 并把 dist 一起提交，否则 Python 模式与 exe 会退回旧页面。启动条件：在 `npm run check` 或打包脚本里加「源码 mtime 晚于 dist」提示，或写进 PR 检查清单；不改 `/api/*` 契约。
+3. **结构化附表人工确认值同步**：`doc_generator._fill_document_tables(tpl, result)` 只取 `result.structured`、不接收 `overrides`，填写页修改的标的清单／商务要求不进入成稿附表。更深一层：`procurement_target_list`、`star_clauses_summary` 在 `fields.json` 里 `template` 为空，而 Vue 版 `use_fill_page.js` 的 `collectValues()` 同样只提交有 `template` 的字段，这类结构化人工值根本没传到后端。启动条件：先写复现测试（改标的清单 → generate → 断言附表值），再同时定前端提交口径与填表函数接收 overrides；不改 `/api/*` 路径。影响生成结果正确性，优先于其他前端项。
+4. **Vue 真实后端联调回归**：本次仅跑本机 HTTP 夹具 `check_vue.mjs` 35/35；`TENDER_CHECK_URL` + `TENDER_SAMPLE` 指向隔离源码服务的 22 项、以及 Word 里核对自定义字段与 8 张附表未跑。启动条件：准备脱敏报告与可打开的 Word，截图落 `data/`。
+5. **表格画像第二期：本地 LLM 兜底判表**：第一期只做形态/值特征规则层，真实样本里「项目 | 内容」形式的项目基本情况表仍判 `unknown`。启动条件：先定「仅低置信表才调模型」的触发阈值，模型给出的列角色必须过值类型复核与 `block_id` + `quote` 证据校验，不通过就落 `unmapped_tables`；`--no-llm` 行为不得变化。
+6. **未映射表的人工补录入口**：`table_profiles` / `unmapped_tables` 已进结果 JSON 与审核报告，但填写页还不能把未映射的表/列认领成字段或附表。启动条件：先定交互口径（认领为自定义字段 / 映射到已有字段），再改 `/fill` 与 `/confirm`。
+7. **脱敏样本补充**（`samples/`）：每类内置模板至少一份，供演示、回归评测与首轮试用前自检；样本还需包含至少一个抽取值为空的字段，才能实机验证 AI 建议条跨页恢复（当前只验证暂存往返）。启动条件：按 `samples/README.md` 脱敏标准取材；计划书 8.1 排在第 1—2 周，是外部验证前置条件。
+8. **预览同步性能达标**：Vue 源码联调「改字段 → 预览可见」约 1.5s（旧原生前端 exe 约 4.6s），任务书要求 800ms 内，而 800ms 防抖本身已占满该目标。启动条件：先分别计时 `preview.build_preview` 与 Vue 渲染，再评估防抖间隔及按 `template_id + mtime` 缓存解析结果；复测以 `scripts/check_browser.mjs` 的实测值为准。
+9. **填写值 / 自定义字段服务端持久化**：移植后普通字段与自定义字段仍只在浏览器 `localStorage` 按 jobId 暂存，换设备、换浏览器或清缓存会丢；后端 `field_values` 表、`/api/jobs/{id}/confirm` 与 `Service.save_confirmed_fields` 已存在但前端从未接入，`/fields` 也只回抽取值。启动条件：先定「确认值覆盖抽取值」的展示口径与状态标记（避免污染 `latest_field_values()` 的历史建议），再让前端 debounce 自动 POST `/confirm`、`/fields` 合并本 job 确认值；不改 API 字段结构。
+10. **预览样式归一化复核**：模板段落样式名是 `null3`，现按「第X章 / 一、 / 1.」文本特征判断层级；换一套章节结构不同的模板要重新验证 `preview._style_of()`。
+11. **工程类模板**：需要独立字段体系（工程量清单、通用/专用合同条款），现有 53 字段覆盖不了。v0.3 已按业务类型补工程类专属字段（写入文末「补充条款」），但正文合同章与工程量清单附表仍依赖先拿到工程类范本原件并单独设计模板。
+12. **评标办法生成器**：评分细则初稿。依赖合规审查已有的判定口径（评分项不得含倾向性）。
+13. **多标段 / 分包识别**：`platform_adapter` 目前固定输出单包 `P1`。
+14. **测试数量口径统一**：当前基线 187 项 / 24 文件（新增 `test_frontend_vue.py`），本文第一节仍写 111 项 / 16 文件、`DEPLOYMENT.md` 第七节 99 项、计划书 168 项；全量长跑偶发 `WinError 10053`（本次「单独复跑失败、全量重跑全绿」，与之前记录方向相反）也应在三处口径中说明。启动条件：下一次全量测试后一并更新，不动代码。
+15. **全量 LLM 计时与 <120s 验收 + 合并精度实测**：调用次数已从 3→1（合并为单次全量且真正覆盖 53 字段），但 <120s 仍取决于本地模型（qwen2.5:7b q4）单请求延迟。启动条件：跑一次真实样本全量 `extract_document(use_llm=True)` 记录 `audit.timing.llm_ms`，同时核对合并大 prompt 下 7B 是否漏字段 / 精度下降；若仍超预算或精度下滑，需在「规则优先只补缺口字段」与「并发独立组调用」之间二选一，二者此前均被否决，需重新确认范围。
+16. **预览缩放可读性人工确认**（可选）：L2 移植到 Vue 后默认缩放比约 0.52、12pt 显示约 6pt；已提供栏内「100%」切换。启动条件：首轮试用记录用户是否频繁切 100%，再决定是否调整默认比例或增加中间档。
+17. **比对页任务恢复与计时基准**（可选）：`compare.html` 的 job 参数恢复已在 Vue 夹具覆盖，但进行中比对任务切页后的读秒基准是否复用 `syncElapsed()` 方案仍需确认；当前不影响首页需求解析链路。
+18. **合规审查 v2**（可选）：规则可配置化（从 `config/compliance.json` 读取）、误报反馈闭环、前端展示命中项。当前规则写在代码里，新增类别需改代码并发版。
+19. **通用栏目进字段契约**：`是否允许进口产品 / 核心产品 / 价格扣除 / 分项权重 / 付款方式` 目前只能走「补充条款」，要真正填进品目表与标的清单，需在 `fields.json` 新增字段、补模板表格渲染与证据规则。属抽取契约变更，先确认再动。

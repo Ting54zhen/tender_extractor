@@ -20,6 +20,29 @@ export function usePage() {
   const filters = [["all", "全部"], ["todo", "待处理"], ["low", "低置信"], ["missing", "缺失"]];
   let scopeSequence = 0, previewSequence = 0, previewTimer = null, toastTimer = null, flashTimer = null, previewController = null;
   const storeKey = kind => "tender." + kind + "." + jobId;
+
+  /** 切页是整页跳转，内存 edits 会重建，字段编辑不落盘就等于白填。
+   *  建议值只是待确认的展示内容，暂存避免切页回来重新调用模型起草，
+   *  采纳前不写抽取结果、不进成稿；暂存损坏时退回抽取值，不把脏数据带进成稿。 */
+  // load() 里的异步赋值会先触发 payload watch；恢复完成前不允许把空 edits 写回存储。
+  let editsReady = false;
+  function persistEdits() { if (editsReady) writeLocal(storeKey("edits"), { ...edits }); }
+  function restoreEdits() {
+    const stored = readLocal(storeKey("edits"), {});
+    if (stored && typeof stored === "object") {
+      for (const [key, entry] of Object.entries(stored)) {
+        if (entry && typeof entry === "object" && typeof entry.value === "string") {
+          edits[key] = { value: entry.value, mode: String(entry.mode || "edited") };
+        }
+      }
+    }
+    editsReady = true;
+  }
+  function persistSuggestions() { writeLocal(storeKey("suggestions"), suggestions.value); }
+  function restoreSuggestions() {
+    const stored = readLocal(storeKey("suggestions"), {});
+    suggestions.value = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+  }
   const scopeComplete = computed(() => axes.every(axis => !!scopeState[axis.key]));
   const ready = computed(() => !loading.value && !scopeLoading.value && scopeComplete.value && jobInfo.value?.status === "done" && !!scopeData.value?.complete);
   const currentTemplate = computed(() => templates.value.find(item => item.id === templateId.value));
@@ -98,6 +121,8 @@ export function usePage() {
   function setField(item, value, mode = "edited") {
     if (item.na) return;
     edits[item.key] = { value, mode };
+    // 采纳后删掉该建议键，避免用户再清空字段时旧模型输出复活。
+    if (mode === "suggested") { delete suggestions.value[item.key]; persistSuggestions(); }
     if (item.custom && !item.cf.scope) persistCustom();
   }
   function acceptAll() {
@@ -107,7 +132,7 @@ export function usePage() {
   async function suggest() {
     if (suggesting.value || !ready.value) return;
     suggesting.value = true;
-    try { const data = await post("/api/jobs/" + encodeURIComponent(jobId) + "/suggest"); suggestions.value = data.suggestions || {}; toast(data.count ? "已起草 " + data.count + " 条建议值，逐条确认后采纳" : data.note || "没有需要起草的字段"); }
+    try { const data = await post("/api/jobs/" + encodeURIComponent(jobId) + "/suggest"); suggestions.value = data.suggestions || {}; persistSuggestions(); toast(data.count ? "已起草 " + data.count + " 条建议值，逐条确认后采纳" : data.note || "没有需要起草的字段"); }
     catch (err) { toast("起草失败：" + err.message); } finally { suggesting.value = false; }
   }
 
@@ -127,8 +152,10 @@ export function usePage() {
     finally { if (sequence === previewSequence) previewLoading.value = false; }
   }
   const previewSections = computed(() => onlyMissing.value ? filterMissingSections(preview.value?.sections) : preview.value?.sections || []);
-  watch(previewOpen, open => { if (open) refreshPreview(); else cancelPreview(); });
+  watch(previewOpen, open => { writeLocal(storeKey("previewOpen"), open); if (open) refreshPreview(); else cancelPreview(); });
   watch(() => JSON.stringify(payload.value), () => {
+    // 所有改值路径都汇到 payload，这里统一按任务暂存，切页回来才不会丢编辑。
+    persistEdits();
     // 值一变就使旧响应失效，防抖期间也不能让旧文档覆盖当前输入。
     cancelPreview();
     if (previewOpen.value && ready.value) previewTimer = setTimeout(refreshPreview, 800);
@@ -201,6 +228,10 @@ export function usePage() {
     catch (err) { notify("生成失败：" + err.message, "error"); } finally { generating.value = false; }
   }
   async function load() {
+    // 必须在第一个 await 之前同步恢复：后续赋值触发的 payload watch 会持久化 edits，
+    // 放到异步流程末尾会被空 edits 覆盖掉上一次会话的暂存。
+    restoreEdits(); restoreSuggestions();
+    previewOpen.value = readLocal(storeKey("previewOpen"), false) === true;
     try {
       if (!jobId) throw new Error("缺少任务参数。请从需求详情页进入填写工作台。");
       jobInfo.value = await api("/api/jobs/" + encodeURIComponent(jobId));
