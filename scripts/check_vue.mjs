@@ -80,11 +80,13 @@ async function handle(req, res) {
   }
   if (url.pathname === '/api/jobs') return json({ jobs: (manyRequirements ? Array.from({ length: 16 }, (_, index) => extractionSnapshot('list-' + index)) : [extractionSnapshot()]).filter(item => !deletedJobs.has(item.id)) });
   if (url.pathname === '/api/extract') return json(extractionSnapshot(), 202);
-  // 对话入口意图桩：按关键词模拟规则层，供会话流回归使用。
+  // 对话入口意图桩：按关键词模拟规则层，高风险动作带 policy.risk=high，
+  // 供「确认卡不产生副作用」的回归使用。
   if (url.pathname === '/api/chat/intent') {
     const asked = String(data.text || '');
-    const intent = /帮助|你能/.test(asked) ? 'help' : /结果|字段/.test(asked) ? 'result' : /解析|采购|需求/.test(asked) ? 'extract' : 'unknown';
-    return json({ intent, matched_by: 'rule', keyword: '' });
+    const intent = /生成招标文件/.test(asked) ? 'generate' : /删除/.test(asked) ? 'delete' : /帮助|你能/.test(asked) ? 'help' : /结果|字段/.test(asked) ? 'result' : /解析|采购|需求/.test(asked) ? 'extract' : 'unknown';
+    const risk = intent === 'unknown' ? 'none' : ['generate', 'delete'].includes(intent) ? 'high' : intent === 'extract' ? 'medium' : 'low';
+    return json({ intent, matched_by: 'rule', keyword: '', policy: { risk, action: intent === 'unknown' ? 'refuse' : 'execute', reason: '夹具策略' } });
   }
   if (url.pathname === '/api/compare') return json(compareJob, 202);
   if (url.pathname.startsWith('/api/jobs/')) {
@@ -340,7 +342,8 @@ async function main() {
   await run('对话入口：纯文本发送走意图分类并内联展示解析摘要', async () => {
     extractionState = 'done';
     await go('/?view=new');
-    await input('#requirement-text', '某单位物业管理服务采购项目需求正文');
+    // 超过 30 字才按「正文」创建任务；短句会被反问，避免把指令当需求正文。
+    await input('#requirement-text', '某单位物业管理服务采购项目需求正文，包含服务范围、人员配置与验收要求');
     await click('#run');
     await waitDom(`document.querySelectorAll('.chat-msg').length >= 2`, '会话消息');
     await waitDom(`document.querySelector('.chat-card .chat-stats')`, '结果摘要卡');
@@ -365,6 +368,33 @@ async function main() {
     await waitDom(`document.body.textContent.includes('超出了本机招标需求解析助手的能力范围')`, '固定拒答文案');
     assert.equal(requests.filter(item => item.path === '/api/extract').length, before, '越界不得创建解析任务');
     assert.ok(await evaluate(`document.querySelector('.chat-via')?.textContent.includes('规则判定')`), '判定来源徽标');
+  });
+  // 高风险动作按 policy.risk=high 先出确认卡：只出卡不算执行，取消不发请求。
+  const confirmCards = label => `Array.from(document.querySelectorAll('.chat-card button')).filter(item => item.textContent === ${JSON.stringify(label)}).length`;
+  const clickConfirm = label => evaluate(`(() => { const buttons = Array.from(document.querySelectorAll('.chat-card button')).filter(item => item.textContent === ${JSON.stringify(label)}); buttons.at(-1)?.click(); })()`);
+  await run('对话高风险动作：生成先确认，取消不发请求、确认后才调用', async () => {
+    const calls = () => requests.filter(item => item.path === '/api/jobs/job-one/generate').length;
+    const before = calls();
+    await input('#requirement-text', '帮我生成招标文件'); await click('#run');
+    await waitDom(`${confirmCards('确认生成')} === 1`, '生成确认卡');
+    assert.ok(await evaluate(`document.body.textContent.includes('字段有值')`), '确认卡带对象摘要');
+    await clickConfirm('取消');
+    await waitDom(`document.body.textContent.includes('已取消，没有执行任何操作')`, '取消固定话术');
+    assert.equal(calls(), before, '取消不得调用生成接口');
+    await input('#requirement-text', '帮我生成招标文件'); await click('#run');
+    await waitDom(`${confirmCards('确认生成')} === 2`, '再次出卡');
+    await clickConfirm('确认生成');
+    await waitFor(() => calls() === before + 1, '确认后生成');
+  });
+  await run('对话高风险动作：删除同样先确认，取消不删除记录', async () => {
+    const calls = () => requests.filter(item => item.method === 'DELETE').length;
+    const before = calls(), messages = await evaluate(`document.querySelectorAll('.chat-msg').length`);
+    await input('#requirement-text', '删除这条记录'); await click('#run');
+    await waitDom(`${confirmCards('确认删除')} === 1`, '删除确认卡');
+    assert.equal(calls(), before, '出卡阶段不得删除');
+    await clickConfirm('取消');
+    await waitDom(`document.querySelectorAll('.chat-msg').length >= ${messages + 3}`, '取消回复');
+    assert.equal(calls(), before, '取消不得删除');
   });
   await go('/');
   await run('需求标题、搜索计数和切换状态布局稳定', async () => {

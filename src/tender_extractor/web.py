@@ -39,6 +39,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
 from .chat import MAX_TEXT_CHARS, ChatIntent, classify_intent
+from .chat_answer import ALLOWED_INTENTS, summarize as summarize_answer
 from .doc_generator import generate_tender_document
 from .field_scopes import axis_options, resolve
 from .llm_client import build_llm_client
@@ -655,19 +656,93 @@ class Service:
     def classify_chat_intent(self, text: str) -> ChatIntent:
         """对话入口的意图识别：规则优先，模型只兜底分类。
 
-        模型仅在健康检查通过时才参与，且超时压到交互可接受的 30s；
-        分类结果被约束在白名单内，模型不产出任何事实值，证据约束
-        仍由抽取链路负责。
+        规则能判的输入不碰模型和健康检查——这类输入本该「笨而确定」，
+        不该被模型服务的可用性拖慢或拖垮（health 抛异常时也要照常分类）；
+        只有规则判不出的短指令才问模型。模型结果受白名单与执行策略约束，
+        不产出任何事实值，证据约束仍由抽取链路负责。
         """
+        rule_only = classify_intent(text)
+        if rule_only.matched_by == "rule":
+            return rule_only
         settings = self.settings().get("llm", {})
         client = None
-        if self.health().get("available"):
-            try:
+        try:
+            if self.health().get("available"):
                 timeout = min(int(settings.get("timeout_seconds", 180)), 30)
                 client = build_llm_client({**settings, "timeout_seconds": timeout})
-            except Exception:  # noqa: BLE001 - 配置异常时退回纯规则
-                client = None
-        return classify_intent(text, client)
+        except Exception:  # noqa: BLE001 - 健康检查或配置异常时退回纯规则
+            client = None
+        return classify_intent(text, client) if client else rule_only
+
+    def chat_answer(
+        self,
+        intent: str,
+        question: str,
+        context: Any,
+        *,
+        client: Any = None,
+    ) -> dict[str, Any]:
+        """把已算好的结构化结果改写成自然中文；越界或异常一律回落固定话术。
+
+        与意图分类同源：只在模型健康时参与，超时压到交互可接受范围；
+        生成内容必须通过数字白名单与承诺措辞校验，模型不产出新的字段值。
+        """
+        config = self.settings().get("chat_summary") or {}
+        enabled = bool(config.get("enabled", True))
+        max_chars = int(config.get("max_chars", 320))
+        fallback = self._chat_fallback(intent, context)
+        if client is None and enabled:
+            client = self._chat_client(config)
+        result = summarize_answer(
+            client,
+            intent=intent,
+            question=question,
+            context=context,
+            fallback=fallback,
+            max_chars=max_chars,
+            enabled=enabled,
+        )
+        return {
+            "answer": result.answer,
+            "matched_by": result.matched_by,
+            "model": result.model,
+            "reason": result.reason,
+        }
+
+    def _chat_client(self, config: dict[str, Any]) -> Any:
+        """表达层可用的模型客户端；健康检查不通过就返回 None 走固定话术。"""
+        if not self.health().get("available"):
+            return None
+        settings = self.settings().get("llm", {})
+        try:
+            timeout = min(
+                int(settings.get("timeout_seconds", 180)),
+                int(config.get("timeout_seconds", 20)),
+            )
+            return build_llm_client({**settings, "timeout_seconds": timeout})
+        except Exception:  # noqa: BLE001 - 配置异常时不让对话入口中断
+            return None
+
+    @staticmethod
+    def _chat_fallback(intent: str, context: Any) -> str:
+        """固定话术兜底：不依赖模型，保证任何情况下都有可读的说明。"""
+        data = context if isinstance(context, dict) else {}
+        if intent == "result":
+            name = str(data.get("filename") or "该记录")
+            if data.get("status") == "done":
+                return f"「{name}」的解析结果已生成，下面按字段分组展示；每条结论都可回到原文证据核对。"
+            return f"「{name}」当前状态：{data.get('status') or '未知'}，详情见下方卡片。"
+        if intent == "missing":
+            total = data.get("total")
+            if isinstance(total, int):
+                return f"待人工复核 {total} 项，请结合原文证据确认后再定稿。"
+            return "以下字段需要人工复核，请结合原文证据确认。"
+        if intent == "jobs":
+            total = data.get("total")
+            if isinstance(total, int):
+                return f"共 {total} 条解析记录，点击可查看结果或继续填写。"
+            return "以下是解析记录，点击可查看结果或继续填写。"
+        return "结果已获取，详见下方卡片。"
 
     # ------------------------------------------------------------------
     # 填写工作台：字段分组与招标文件生成
@@ -1577,6 +1652,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_company_save()
         if parsed.path == "/api/chat/intent":
             return self._handle_chat_intent()
+        if parsed.path == "/api/chat/answer":
+            return self._handle_chat_answer()
         if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/generate"):
             return self._handle_generate(parsed.path)
         if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/confirm"):
@@ -1598,6 +1675,10 @@ class Handler(BaseHTTPRequestHandler):
         allow = (query.get("allow_non_tender") or ["0"])[0] in {"1", "true", "yes"}
         project_id = (query.get("project_id") or [None])[0] or None
 
+        source_path = (query.get("source_path") or [None])[0]
+        if source_path:
+            return self._extract_from_source_path(source_path, use_llm, allow, project_id)
+
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -1612,6 +1693,51 @@ class Handler(BaseHTTPRequestHandler):
         payload = self.rfile.read(length)
         try:
             job = self.service.submit(filename, payload, use_llm, allow, project_id)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 400)
+        return self._send_json(job.public(), 202)
+
+    def _extract_from_source_path(
+        self, raw: str, use_llm: bool, allow: bool, project_id: str | None
+    ) -> None:
+        """路径直达：本机服务代读磁盘文件，走与上传完全相同的抽取链路。
+
+        浏览器页面受沙箱限制读不了任意路径，对话里说「解析 D:\\xxx.docx」只能
+        由本机后端代读。为不把它变成远程任意文件读取，这里只在回环地址启用：
+        服务若被改绑 0.0.0.0，本接口直接拒绝。扩展名与大小与上传同款校验。
+        """
+        host = self.server.server_address[0] if self.server.server_address else ""
+        if host not in {"127.0.0.1", "::1", "localhost"}:
+            return self._send_json({"error": "路径直达仅在本机服务可用，请改用上传文件。"}, 403)
+        path = Path(raw.strip().strip('"').strip("'"))
+        if not path.is_absolute():
+            return self._send_json({"error": f"仅支持绝对路径：{raw}"}, 400)
+        if not path.exists() or not path.is_file():
+            return self._send_json({"error": f"文件不存在或不是文件：{path}"}, 400)
+        suffix = path.suffix.lower()
+        if suffix not in ALLOWED_SUFFIXES:
+            return self._send_json(
+                {
+                    "error": (
+                        f"不支持的文件类型 {suffix or '（无扩展名）'}，仅支持 "
+                        + "、".join(sorted(ALLOWED_SUFFIXES))
+                    )
+                },
+                400,
+            )
+        size = path.stat().st_size
+        if size <= 0:
+            return self._send_json({"error": "文件内容为空。"}, 400)
+        if size > MAX_UPLOAD_BYTES:
+            return self._send_json(
+                {"error": f"文件超过上限 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB"}, 413
+            )
+        try:
+            payload = path.read_bytes()
+        except OSError as exc:
+            return self._send_json({"error": f"读取文件失败：{exc}"}, 400)
+        try:
+            job = self.service.submit(path.name, payload, use_llm, allow, project_id)
         except ValueError as exc:
             return self._send_json({"error": str(exc)}, 400)
         return self._send_json(job.public(), 202)
@@ -2110,6 +2236,32 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:  # noqa: BLE001 - 分类组件失败降级，不让对话入口报错中断
             intent = ChatIntent(intent="unknown", matched_by="fallback", keyword="分类服务降级")
         return self._send_json(intent.to_dict())
+
+    def _handle_chat_answer(self) -> None:
+        """对话表达层：POST /api/chat/answer {intent, question, context}。
+
+        只接受展示型场景；越界、模型不可用或校验失败都返回固定话术（200），
+        前端拿 answer 替换气泡文本，卡片与证据不受影响。
+        """
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json({"error": "请求体不是合法 JSON 对象"}, 400)
+        intent = body.get("intent")
+        if intent not in ALLOWED_INTENTS:
+            return self._send_json({"error": "intent 不在允许范围"}, 400)
+        question = body.get("question")
+        if question is not None and not isinstance(question, str):
+            return self._send_json({"error": "question 必须是字符串"}, 400)
+        context = body.get("context")
+        if not isinstance(context, (dict, list)):
+            return self._send_json({"error": "context 必须是对象或数组"}, 400)
+        try:
+            data = self.service.chat_answer(intent, (question or "").strip()[:500], context)
+        except Exception as exc:  # noqa: BLE001 - 表达层失败不影响用户拿到结果
+            return self._send_json(
+                {"answer": "", "matched_by": "fallback", "model": "", "reason": str(exc)}
+            )
+        return self._send_json(data)
 
     def _handle_analyze(self, path: str) -> None:
         """知识图谱风险分析：废标预警 / 符合性自查 / 评分点材料映射。"""

@@ -74,11 +74,12 @@ export default {
             <span class="hintline" v-if="!message.card.job?.downloads?.json && !message.card.job?.downloads?.md && !message.card.job?.downloads?.draft">该任务暂无可下载文件</span>
           </div>
         </template>
-        <!-- 删除需二次确认，确认权始终在用户手里 -->
-        <template v-else-if="message.card.type === 'confirm-delete'">
+        <!-- 高风险动作（生成 / 删除）先确认：动作与对象在气泡里，按钮只决定执不执行，
+             点取消不发请求，确认权始终在用户手里 -->
+        <template v-else-if="message.card.type === 'confirm-risk'">
           <div class="chat-ops">
-            <button class="btn small delete-soft" :disabled="working" @click="$emit('act', 'delete-yes', message.card.job)">确认删除</button>
-            <button class="btn small" @click="$emit('act', 'pick-job', message.card.job)">先保留</button>
+            <button class="btn small" :class="message.card.intent === 'delete' ? 'delete-soft' : 'primary'" :disabled="working" @click="$emit('act', 'confirm-yes', message.card)">{{ message.card.intent === 'delete' ? '确认删除' : '确认生成' }}</button>
+            <button class="btn small" :disabled="working" @click="$emit('act', 'confirm-no', message.card)">取消</button>
           </div>
         </template>
       </div>

@@ -835,7 +835,13 @@ def test_chat_intent_rules_do_not_touch_model(server, service) -> None:
     """规则命中的指令与需求正文直接返回，接口只回白名单意图。"""
     status, data = _post(server + "/api/chat/intent", {"text": "帮我生成招标文件"})
     assert status == 200
-    assert data == {"intent": "generate", "matched_by": "rule", "keyword": "生成招标文件"}
+    assert data == {
+        "intent": "generate",
+        "matched_by": "rule",
+        "keyword": "生成招标文件",
+        "target": None,
+        "policy": {"risk": "high", "action": "execute", "reason": "不可逆或对外动作，建议先确认"},
+    }
 
     content = (
         "某单位物业管理服务采购项目，预算120万元，服务期一年，"
@@ -856,7 +862,13 @@ def test_chat_intent_llm_fallback_is_whitelisted(server, service, monkeypatch) -
     )
     status, data = _post(server + "/api/chat/intent", {"text": "帮我搞定一下那个文件"})
     assert status == 200
-    assert data == {"intent": "missing", "matched_by": "llm", "keyword": ""}
+    assert data == {
+        "intent": "missing",
+        "matched_by": "llm",
+        "keyword": "",
+        "target": None,
+        "policy": {"risk": "low", "action": "execute", "reason": "只读动作，直接执行"},
+    }
 
     monkeypatch.setattr(
         web, "build_llm_client", lambda settings: _IntentClient({"intent": "伪造字段值"})
@@ -898,5 +910,137 @@ def test_chat_intent_classifier_failure_degrades(server, service, monkeypatch) -
     monkeypatch.setattr(service, "classify_chat_intent", broken)
     status, data = _post(server + "/api/chat/intent", {"text": "查看解析结果"})
     assert status == 200
-    assert data == {"intent": "unknown", "matched_by": "fallback", "keyword": "分类服务降级"}
+    assert data == {
+        "intent": "unknown",
+        "matched_by": "fallback",
+        "keyword": "分类服务降级",
+        "target": None,
+        "policy": {"risk": "none", "action": "refuse", "reason": "越界或无法确认"},
+    }
+
+
+def test_chat_intent_resolves_local_path_target(server) -> None:
+    """路径句要给出 path 槽位，而不是让界面把整句当需求正文打包。"""
+    path = "D:\\新建文件夹\\01-笼盒自动化处理系统采购项目采购需求 (1).docx"
+    text = '我要抽取"' + path + '"的结构化字段并附上原文。'
+
+    status, data = _post(server + "/api/chat/intent", {"text": text})
+    assert status == 200
+    assert data["intent"] == "extract"
+    assert data["target"] == {"type": "path", "value": path}
+
+
+def test_chat_intent_extract_without_target_asks_back(server) -> None:
+    """只说「帮我解析那个文件」时 target 留空，由界面反问而不是创建任务。"""
+    status, data = _post(server + "/api/chat/intent", {"text": "帮我解析那个文件"})
+    assert status == 200
+    assert data["intent"] == "extract"
+    assert data["target"] is None
+
+
+# ---------------------------------------------------------------------------
+# 对话入口「路径直达」：POST /api/extract?source_path= 由本机服务代读磁盘文件
+# ---------------------------------------------------------------------------
+
+
+def _post_empty(url: str) -> tuple[int, dict]:
+    """无 body 的 POST，对应前端路径直达时只带 query、不带文件的请求。"""
+    req = urllib.request.Request(url, data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read()
+        exc.close()
+        return exc.code, json.loads(body.decode("utf-8") or "{}")
+
+
+def test_extract_by_source_path_reads_local_file(server, tmp_path) -> None:
+    """路径直达：本机服务按路径读文件并走同一抽取链路，回显真实文件名。"""
+    from urllib.parse import quote
+
+    from test_llm_pipeline import _build_requirement_docx
+
+    docx = tmp_path / "需求报告-路径直达.docx"
+    _build_requirement_docx(docx)
+
+    url = f"{server}/api/extract?source_path={quote(str(docx))}&use_llm=0"
+    status, data = _post_empty(url)
+    assert status == 202
+    assert data["filename"] == "需求报告-路径直达.docx"
+    assert data["id"]
+
+
+def test_extract_by_source_path_rejects_missing(server, tmp_path) -> None:
+    """路径不存在要明确报错，不能当正文打包成文字任务。"""
+    from urllib.parse import quote
+
+    missing = tmp_path / "不存在的文件.docx"
+    status, data = _post_empty(
+        f"{server}/api/extract?source_path={quote(str(missing))}&use_llm=0"
+    )
+    assert status == 400
+    assert "不存在" in data["error"]
+
+
+def test_extract_by_source_path_rejects_unsupported_suffix(server, tmp_path) -> None:
+    """扩展名白名单外的一律拒绝，避免把任意文件当需求正文。"""
+    from urllib.parse import quote
+
+    bad = tmp_path / "脚本.exe"
+    bad.write_bytes(b"MZ")
+    status, data = _post_empty(
+        f"{server}/api/extract?source_path={quote(str(bad))}&use_llm=0"
+    )
+    assert status == 400
+    assert "不支持" in data["error"]
+
+
+def test_chat_intent_rules_survive_health_failure(server, service, monkeypatch) -> None:
+    """规则能判的指令不该依赖模型健康检查：health 挂了也必须正常分类。"""
+    def boom():
+        raise RuntimeError("模型服务不可用")
+
+    monkeypatch.setattr(service, "health", boom)
+    status, data = _post(server + "/api/chat/intent", {"text": "我要做招标文件"})
+    assert status == 200
+    assert data["intent"] == "generate"
+    assert data["matched_by"] == "rule"
+
+
+def test_chat_intent_returns_execution_policy(server, service, monkeypatch) -> None:
+    """策略随分类一起返回：缺对象要 ask，越界要 refuse。"""
+    monkeypatch.setattr(service, "health", lambda: {"available": False})
+
+    status, data = _post(server + "/api/chat/intent", {"text": "帮我解析那个文件"})
+    assert status == 200
+    assert data["policy"]["action"] == "ask"
+    assert data["policy"]["risk"] == "medium"
+
+    status, data = _post(server + "/api/chat/intent", {"text": "能不能写一首关于招标的诗"})
+    assert status == 200
+    assert data["policy"] == {"risk": "none", "action": "refuse", "reason": "越界或无法确认"}
+
+
+def test_chat_answer_falls_back_without_model(service, server, monkeypatch) -> None:
+    """表达层拿不到模型时返回固定话术，对话不报错、卡片不受影响。"""
+    monkeypatch.setattr(service, "health", lambda: {"available": False})
+    status, data = _post(
+        f"{server}/api/chat/answer",
+        {
+            "intent": "result",
+            "question": "结果怎么样",
+            "context": {"filename": "需求.docx", "status": "done", "summary": {"fields": 42}},
+        },
+    )
+    assert status == 200
+    assert data["matched_by"] in {"fallback", "disabled"}
+    assert "需求.docx" in data["answer"]
+
+
+def test_chat_answer_rejects_unknown_intent(server) -> None:
+    """帮助/删除等场景必须走固定话术，不允许借表达层改写。"""
+    status, data = _post(f"{server}/api/chat/answer", {"intent": "delete", "context": {}})
+    assert status == 400
+    assert "intent" in data["error"]
 
