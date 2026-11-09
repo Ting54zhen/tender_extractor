@@ -148,7 +148,8 @@ def test_llm_candidate_is_merged_and_grounded(tmp_path):
 
     assert result["meta"]["llm_available"] is True
     assert result["audit"]["llm"]["calls"] >= 1
-    assert "basic" in result["audit"]["llm"]["groups"]
+    # 合并抽取后分组键为 "all"（覆盖全部字段，含原 rules-only 分组）。
+    assert "all" in result["audit"]["llm"]["groups"]
 
     field = result["fields"]["contract_ip"]
     assert field["value"] == "知识产权归采购人所有"

@@ -435,6 +435,13 @@ def _iso_to_ts(value: str | None) -> float | None:
         return None
 
 
+# 启动对账按数据库路径只做一次：同一进程里可能对同一个 DB 再建 Service
+# （测试的「模拟重启」、未来同进程多入口），第二个实例可能正带着活跃任务，
+# 重复对账会把它们误标为中断。不同 DB 各自仍需对账。
+_RECONCILE_LOCK = threading.Lock()
+_RECONCILED_DBS: set[str] = set()
+
+
 class Service:
     """任务队列 + 结果缓存 + SQLite 持久化。
 
@@ -459,6 +466,29 @@ class Service:
         self._health: dict[str, Any] | None = None
         self._health_at = 0.0
         self._groups: list[dict[str, Any]] | None = None
+        self._interrupt_orphan_jobs()
+
+    def _interrupt_orphan_jobs(self) -> None:
+        """把上次进程没跑完的任务标为「已中断」。
+
+        工作线程是 daemon，强制关窗或进程被结束时 ``_run`` 的 finally 不一定执行，
+        SQLite 会永久留下 queued/running。首页启动时会扫描进行中任务并自动恢复轮询，
+        这些没有线程推进的孤儿任务就表现为「还没上传就在解析」且永不结束。构造
+        Service 时内存 jobs 必为空，DB 里仍标进行中的只能属于上一次进程，因此启动
+        时做状态对账是唯一能区分「真在跑」与「僵尸任务」的位置。
+        """
+        key = str(self.db.db_path)
+        with _RECONCILE_LOCK:
+            if key in _RECONCILED_DBS:
+                return
+            _RECONCILED_DBS.add(key)
+        count = self.db.interrupt_unfinished_jobs(
+            stage="已中断",
+            error="程序在任务完成前退出，本次启动已将该任务标记为中断，请重新上传文件",
+            finished_at=datetime.now().isoformat(timespec="seconds"),
+        )
+        if count:
+            _log(f"[web] 启动时中断 {count} 个未完成任务（进程退出时未回写状态）")
 
     # ------------------------------------------------------------------
     # 配置与健康检查

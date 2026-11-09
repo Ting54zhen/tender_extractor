@@ -19,7 +19,6 @@ from .llm_extract import (
     evidence_supports_value,
     extract_group,
     repair_fields,
-    select_context,
 )
 from .llm_client import LLMClient, LLMError, build_llm_client
 from .reviewer import ReviewStats, resolve_settings, review_candidates
@@ -110,25 +109,33 @@ class Extractor:
         allow_non_tender: bool = False,
     ) -> ExtractionResult:
         start = time.perf_counter()
+        timing: dict[str, float] = {}
+        t0 = time.perf_counter()
         path = Path(path)
         doc = read_document(path)
         source = self._source_info(path, doc)
+        timing["read_document_ms"] = (time.perf_counter() - t0) * 1000
 
+        t0 = time.perf_counter()
         extraction_settings = self.settings.get("extraction", {})
         doc_type = classify_document(
             doc,
             float(extraction_settings.get("document_type_threshold", 4.0)),
         )
+        timing["classify_ms"] = (time.perf_counter() - t0) * 1000
         require_tender = bool(extraction_settings.get("require_tender_document", True))
         if require_tender and not allow_non_tender and not doc_type.is_tender:
             return self._skipped_result(source, doc, doc_type, start)
 
+        t0 = time.perf_counter()
         rules_output = extract_rules(doc, self.field_defs)
+        timing["rules_ms"] = (time.perf_counter() - t0) * 1000
 
         merged: dict[str, Candidate] = dict(rules_output.candidates)
         conflicts: dict[str, dict[str, Any]] = {}
         attempts: dict[str, int] = {}
 
+        t0 = time.perf_counter()
         llm_settings = self.settings.get("llm", {})
         llm_stats = LLMStats(
             enabled=bool(use_llm and llm_settings.get("enabled", True)),
@@ -259,6 +266,9 @@ class Extractor:
                 doc, merged, review_settings, review_stats
             )
 
+        timing["llm_ms"] = (time.perf_counter() - t0) * 1000
+
+        t0 = time.perf_counter()
         field_values = self._build_field_values(merged, attempts, conflicts)
         validation, normalizations = apply_validation(
             field_values,
@@ -268,6 +278,7 @@ class Extractor:
             float(self.settings.get("extraction", {}).get("min_confidence", 0.6)),
             float(self.settings.get("extraction", {}).get("grounding_fuzzy_threshold", 0.86)),
         )
+        timing["validation_ms"] = (time.perf_counter() - t0) * 1000
         for key in conflicts:
             if key in field_values and field_values[key].value not in (None, ""):
                 field_values[key].warnings.append(
@@ -319,6 +330,7 @@ class Extractor:
             audit={
                 "document_type": doc_type.to_dict(),
                 "extraction_skipped": False,
+                "timing": timing,
                 "llm": llm_stats.to_dict(),
                 "review": review_stats.to_dict(),
                 "repair_rounds": repair_audit,
@@ -346,31 +358,21 @@ class Extractor:
         stats: LLMStats,
         char_budget: int,
     ) -> dict[str, Candidate]:
-        candidates: dict[str, Candidate] = {}
-        errors = 0
-        for group in GROUP_ORDER:
-            fields = self._fields_for_group(group)
-            if not fields:
-                continue
-            context = select_context(doc, group, fields, char_budget)
-            if not context:
-                continue
-            if group == "scoring" and not any(
-                ("评分" in block.text or "评审" in block.text or "分值" in block.text)
-                for block in doc.blocks
-            ):
-                continue
-            try:
-                group_candidates, _ = extract_group(client, doc, group, fields, char_budget)
-                candidates.update(group_candidates)
-                stats.groups[group] = len(group_candidates)
-            except LLMError as exc:
-                errors += 1
-                stats.error = str(exc)
-                stats.groups[group] = -1
-                if errors >= 2:
-                    break
-        return candidates
+        # 真正全量：把全部字段合并成单次串行 LLM 调用，覆盖原 rules-only 的
+        # party/award/inquiry 分组；相比原先逐组 3 次调用，少 2 次 prefill 与往返。
+        all_fields = list(self.field_defs.values())
+        if not all_fields:
+            return {}
+        # 合并调用需覆盖全部章节，上下文预算放宽（仍是单次，总 token 低于原 3×预算）。
+        combined_budget = max(char_budget, 6000)
+        try:
+            group_candidates, _ = extract_group(client, doc, None, all_fields, combined_budget)
+            stats.groups["all"] = len(group_candidates)
+            return dict(group_candidates)
+        except LLMError as exc:
+            stats.error = str(exc)
+            stats.groups["all"] = -1
+            return {}
 
     def _run_review(
         self,

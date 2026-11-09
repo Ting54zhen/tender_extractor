@@ -292,6 +292,7 @@
       })
       .then(function (job) {
         state.jobId = job.id;
+        state.startedAt = Date.now();
         beginTicking();
         poll(job.id);
       })
@@ -304,12 +305,25 @@
       });
   }
 
+  // 计时基准由调用方给出：新任务用提交时刻，恢复任务用服务端 elapsed。
+  // 页面切换是整页跳转，若这里自己取 Date.now()，切回来读秒就会从 0 重来。
   function beginTicking() {
     stopTicking();
-    state.startedAt = Date.now();
     state.tick = setInterval(function () {
       $("status-elapsed").textContent = ((Date.now() - state.startedAt) / 1000).toFixed(1) + "s";
     }, 100);
+  }
+  // 后端 public() 的 elapsed 按任务创建时间计算，跨页面重载依然连续；
+  // 每次轮询都校准本地基准，避免浏览器节流造成累计漂移。
+  function syncElapsed(job) {
+    if (typeof job.elapsed !== "number" || !isFinite(job.elapsed)) {
+      // 接口没给有效 elapsed 时兜底：startedAt 还是 0 会让 tick 算出 1.7e9 秒；
+      // 已有基准则保持，避免把读秒拉回 0。
+      if (!state.startedAt) state.startedAt = Date.now();
+      return;
+    }
+    state.startedAt = Date.now() - job.elapsed * 1000;
+    $("status-elapsed").textContent = job.elapsed.toFixed(1) + "s";
   }
   function stopTicking() {
     if (state.tick) { clearInterval(state.tick); state.tick = null; }
@@ -319,6 +333,7 @@
     fetch("/api/jobs/" + jobId).then(function (r) { return r.json(); }).then(function (job) {
       $("status-title").textContent = job.stage || "处理中";
       if (job.status === "queued" || job.status === "running") {
+        syncElapsed(job);
         $("status-sub").textContent = job.use_llm
           ? "规则抽取 + 本地模型补缺，长文档可能需要 1 分钟"
           : "仅规则抽取，通常几秒完成";
@@ -850,11 +865,9 @@
       })
       .then(function (job) {
         if (job.status === "queued" || job.status === "running") {
-          state.startedAt = Date.now();
           state.jobId = job.id;
-          state.tick = setInterval(function () {
-            $("status-elapsed").textContent = ((Date.now() - state.startedAt) / 1000).toFixed(1) + "s";
-          }, 100);
+          syncElapsed(job);
+          beginTicking();
           poll(job.id);
           return;
         }

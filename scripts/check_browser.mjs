@@ -340,6 +340,109 @@ function main() {
     add('刷新后自定义字段持久化', persisted?.hit === true, JSON.stringify(persisted));
     add('不同任务之间不串数据', persisted?.other === null, `other=${persisted?.other}`);
 
+    // 读秒基准：切页再回来应从服务端 elapsed 继续，而不是从 0 重来。
+    // 用 CDP 注入 fetch 桩模拟一个已运行 42 秒的进行中任务，避免依赖真实任务耗时。
+    const mockSource = `(function(){
+      var orig = window.fetch;
+      window.fetch = function(url) {
+        if (typeof url === 'string' &&
+            (url === '/api/jobs' || url === '/api/jobs/mock-running')) {
+          var running = { id: 'mock-running', kind: 'extract', status: 'running',
+                          stage: '解析文档并抽取字段', use_llm: false, elapsed: 42.0 };
+          var body = url === '/api/jobs' ? { jobs: [running] } : running;
+          return Promise.resolve({ ok: true, status: 200,
+            json: function(){ return Promise.resolve(body); } });
+        }
+        return orig.apply(this, arguments);
+      };
+    })();`;
+    const injected = await send('Page.addScriptToEvaluateOnNewDocument', { source: mockSource });
+    await go('/', 1500);
+    await waitDom(`document.getElementById('status')?.classList.contains('show')`, '恢复状态卡片显示');
+    const first = await ev(`document.getElementById('status-elapsed')?.textContent`);
+    await go('/templates', 1000);
+    await go('/', 1500);
+    await waitDom(`document.getElementById('status')?.classList.contains('show')`, '再次返回状态卡片显示');
+    const back = await ev(`document.getElementById('status-elapsed')?.textContent`);
+    const firstSecs = parseFloat(first || '0');
+    const backSecs = parseFloat(back || '0');
+    add('切页返回后读秒从服务端耗时继续（不归零）',
+        firstSecs >= 42 && firstSecs < 45 && backSecs >= 42 && backSecs < 45,
+        `first=${first} back=${back}`);
+    await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: injected.identifier });
+
+    // 填写工作台：切到别的页面再回来，已填的值不能归零
+    await go(`/fill?job=${job.id}`, 1400);
+    await waitDom(`document.querySelectorAll('.field[data-key]:not([data-na]) [data-input]').length > 0`,
+      '填写页可编辑字段就绪');
+    const draft = await ev(`(function(){
+      var el=[].slice.call(document.querySelectorAll('.field[data-key]:not([data-na]) [data-input]'))[0];
+      if(!el) return null;
+      var f=el.closest('.field');
+      el.value='CDP切页保留标记';
+      el.dispatchEvent(new Event('input',{bubbles:true}));
+      return {key: f.getAttribute('data-key') || '', tpl: f.getAttribute('data-template') || ''};
+    })()`);
+    await go('/templates', 800);
+    await go(`/fill?job=${job.id}`, 1400);
+    await waitDom(`document.querySelectorAll('.field[data-key]:not([data-na]) [data-input]').length > 0`,
+      '返回填写页字段就绪');
+    const backValue = await ev(`(function(){
+      var key=${JSON.stringify(draft?.key || '')};
+      var f=document.querySelector('.field[data-key="'+CSS.escape(key)+'"]');
+      var el=f && f.querySelector('[data-input]');
+      return el ? el.value : null;
+    })()`);
+    add('切页返回后填写值不归零', !!draft && backValue === 'CDP切页保留标记',
+        `key=${draft?.key} before=CDP切页保留标记 after=${backValue}`);
+
+    // L2 预览同屏：整页 A4 按栏宽缩放后不应再被横向裁切
+    await ev(`(function(){ var p=document.getElementById('previewPane');
+      if(p && p.hidden) document.getElementById('btnPreview').click(); return true; })()`);
+    await waitDom(`document.querySelectorAll('#paper .pv-table').length > 0`, '缩放后预览纸面渲染');
+    const fit = await ev(`(function(){
+      var scroll=document.getElementById('pvScroll'), paper=document.getElementById('paper'),
+          box=document.getElementById('paperFit');
+      if(!scroll||!paper||!box) return null;
+      var pr=paper.getBoundingClientRect(), sr=scroll.getBoundingClientRect();
+      return {paperW: Math.round(pr.width), scrollW: scroll.clientWidth,
+              fitW: Math.round(box.getBoundingClientRect().width),
+              overflow: Math.round(pr.right - sr.right),
+              transform: getComputedStyle(paper).transform};
+    })()`);
+    add('生成前预览整页在栏内完整可见',
+        fit && fit.paperW <= fit.scrollW + 2 && fit.overflow <= 2, JSON.stringify(fit));
+
+    // 预览面板开合状态按任务记住
+    await go('/templates', 800);
+    await go(`/fill?job=${job.id}`, 1400);
+    await waitDom(`!document.getElementById('previewPane').hidden`, '返回填写页预览恢复');
+    const pvState = await ev(`(function(){
+      var p=document.getElementById('previewPane');
+      return {open: p ? !p.hidden : null,
+              stored: localStorage.getItem('tender.previewOpen.${job.id}')};
+    })()`);
+    add('切页返回后预览面板保持打开', pvState?.open === true, JSON.stringify(pvState));
+
+    // AI 起草建议：样本里没有抽取值为空的字段，建议条按设计不会渲染，
+    // 因此这里验证跨页暂存本身（写入 → 切页 → 内容仍在且未被清掉）。
+    const suggKey = `tender.suggestions.${job.id}`;
+    await ev(`localStorage.setItem(${JSON.stringify(suggKey)}, JSON.stringify({
+      project_name: {value:'CDP建议保留标记', reason:'浏览器回归', source:'llm_suggest'}
+    }))`);
+    await go('/templates', 700);
+    await go(`/fill?job=${job.id}`, 1400);
+    await waitDom(`document.getElementById('loading').classList.contains('hidden')`, '建议暂存页就绪');
+    const suggKept = await ev(`(function(){
+      try {
+        var raw = JSON.parse(localStorage.getItem(${JSON.stringify(suggKey)}) || '{}');
+        return !!(raw.project_name && raw.project_name.value === 'CDP建议保留标记');
+      } catch(e) { return false; }
+    })()`);
+    add('切页返回后 AI 起草建议暂存保留', suggKept === true,
+        `key=${suggKey} kept=${suggKept}`);
+
+    // 放到最后统计，覆盖上面所有导航（含注入 fetch 桩与切页往返）
     const external = [...new Set(events
       .filter((e) => e.method === 'Network.requestWillBeSent')
       .map((e) => e.params.request.url)

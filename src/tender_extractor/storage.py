@@ -295,6 +295,25 @@ class Database:
         params.append(job_id)
         self._write(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", tuple(params))
 
+    def interrupt_unfinished_jobs(self, stage: str, error: str, finished_at: str) -> int:
+        """把没有执行线程的 queued/running 任务一次性标为中断，返回条数。
+
+        启动对账要覆盖全部历史任务：逐条 SELECT 会受 list_jobs 分页上限影响，
+        也没必要把整表读进内存，用一条带状态条件的 UPDATE 最准确。
+        """
+        with self._write_lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    "UPDATE jobs SET status = 'error', stage = ?, error = ?,"
+                    " finished_at = ? WHERE status IN ('queued', 'running')",
+                    (stage, error, finished_at),
+                )
+                conn.commit()
+                return cur.rowcount
+            finally:
+                conn.close()
+
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         rows = self._query("SELECT * FROM jobs WHERE id = ?", (job_id,))
         return self._job_row(rows[0]) if rows else None

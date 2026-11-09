@@ -28,6 +28,12 @@
   word-break: break-word;
 }
 
+/* 填写工作台的侧栏只有 360–460px，A4 纸固定 210mm 会被横向裁切。
+   外层 paper-fit 按 JS 算出的比例撑出真实占位，纸张本身用 transform 缩放，
+   DOM 结构与「点片段跳回字段」的点击定位都不受影响。 */
+.paper-fit { position: relative; margin: 0 auto; }
+.paper-fit .paper { transform-origin: top left; margin: 0; }
+
 .paper p {
   margin: 0 0 4pt;
   white-space: pre-wrap;

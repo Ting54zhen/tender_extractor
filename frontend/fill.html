@@ -364,11 +364,13 @@
             <h3>生成前预览</h3>
             <div class="spacer"></div>
             <span class="pv-stats" id="pvStats">—</span>
+            <button class="btn small ghost" id="btnFitPreview" title="按预览栏宽度缩放整页">适应宽度</button>
+            <button class="btn small ghost" id="btnFullPreview" title="按 A4 原尺寸查看，栏内横向滚动">100%</button>
             <button class="btn small ghost" id="btnClosePreview">关闭</button>
           </div>
           <div class="pv-pane-body">
             <div class="pv-loading hidden" id="pvLoading">正在生成预览…</div>
-            <div class="preview-scroll"><div class="paper" id="paper"></div></div>
+            <div class="preview-scroll" id="pvScroll"><div class="paper-fit" id="paperFit"><div class="paper" id="paper"></div></div></div>
           </div>
           <div class="pv-pane-foot">
             <label class="chip"><input type="checkbox" id="pvOnlyMissing"> 只看缺失</label>
@@ -453,6 +455,48 @@
   var groupsData = [];
   var state = {};          // key -> { mode: 'ai' | 'accepted' | 'edited' | 'cleared', value }
   var suggestions = {};    // key -> { value, reason, source: 'llm_suggest' }（AI 起草的建议值）
+
+  var STATE_KEY = "tender-fill-state-" + jobId;
+  var PREVIEW_KEY = "tender.previewOpen." + jobId;
+  var FIT_KEY = "tender.previewFit." + jobId;
+  var SUGGEST_KEY = "tender.suggestions." + jobId;
+  var fitMode = true;   // 默认按预览栏宽度缩放整页，栏内可切 100%
+
+  function saveViewState() {
+    try {
+      localStorage.setItem(PREVIEW_KEY, previewOpen ? "1" : "0");
+      localStorage.setItem(FIT_KEY, fitMode ? "1" : "0");
+    } catch (e) { /* 隐私模式不可写时只影响跨页恢复 */ }
+  }
+  function restoreViewState() {
+    try {
+      fitMode = localStorage.getItem(FIT_KEY) !== "0";
+      return localStorage.getItem(PREVIEW_KEY) === "1";
+    } catch (e) { return false; }
+  }
+  function saveSuggestions() {
+    // 建议值只是待确认的展示内容，采纳前不写入抽取结果、不进入成稿；
+    // 暂存仅为避免切页回来重新调用模型起草。
+    try { localStorage.setItem(SUGGEST_KEY, JSON.stringify(suggestions)); }
+    catch (e) { /* 同上 */ }
+  }
+  function restoreSuggestions() {
+    try { suggestions = JSON.parse(localStorage.getItem(SUGGEST_KEY) || "{}") || {}; }
+    catch (e) { suggestions = {}; }
+  }
+
+  function saveState() {
+    // 与自定义字段、项目类型一样按 jobId 暂存：切到别的页面是整页跳转，
+    // 内存 state 会重建，字段编辑此前只活在内存里，不落盘就等于白填。
+    try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); }
+    catch (e) { /* 隐私模式等不可写时只影响跨页恢复，不影响当前会话填写 */ }
+  }
+  function restoreState() {
+    try {
+      var raw = localStorage.getItem(STATE_KEY);
+      if (raw) state = JSON.parse(raw) || {};
+    } catch (e) { state = {}; }  // 暂存损坏时退回抽取值，不把脏数据带进成稿
+  }
   var filter = "all";
   var activeGroup = "";    // 当前显示的分组 key（分组切换视图）
 
@@ -1100,6 +1144,7 @@
           syncStateLabel(el, "已采用历史值");
           if (histBtn.parentNode) histBtn.parentNode.remove();
           updateProgress();
+          saveState();  // 这两个按钮不经过 schedulePreview()
         });
       }
 
@@ -1113,7 +1158,10 @@
           el.classList.remove("missing");
           syncStateLabel(el, "已采纳 AI 建议");
           if (suggBtn.parentNode) suggBtn.parentNode.remove();
+          delete suggestions[key];
+          saveSuggestions();
           updateProgress();
+          saveState();  // 这两个按钮不经过 schedulePreview()
         });
       }
 
@@ -1279,15 +1327,23 @@
 
   var lastPreview = null;
 
-  function setPreviewOpen(on) {
+  function setPreviewOpen(on, refresh) {
     previewOpen = on;
     $("previewPane").hidden = !on;
     $("app").classList.toggle("with-preview", on);
     $("btnPreview").textContent = on ? "关闭预览" : "预览";
-    if (on) refreshPreview();
+    saveViewState();
+    if (on) {
+      // 页面加载时只恢复面板、不发预览请求：字段集还没拉下来，
+      // 先请求会闪一屏「全待补充」；applyScope 完成后 loadFields 会刷新。
+      if (refresh !== false) refreshPreview();
+      applyPreviewScale();
+    }
   }
 
   function schedulePreview() {
+    // 所有改字段的路径都经过这里（预览未打开时也会经过），顺带落盘。
+    saveState();
     if (!previewOpen) return;
     clearTimeout(previewTimer);
     previewTimer = setTimeout(refreshPreview, 800);
@@ -1332,6 +1388,24 @@
       : (lastPreview.sections || []);
     $("paper").innerHTML = window.TenderPreview.render(sections) ||
       '<p class="pv-body">当前筛选下没有内容。</p>';
+    applyPreviewScale();
+  }
+
+  // L2：三栏宽度不动，把整页 A4 按预览栏可用宽度等比缩放，栏内即可看全；
+  // 100% 模式只去掉缩放，仍在同一个画面里横向滚动，不弹窗、不切页。
+  function applyPreviewScale() {
+    var scroll = $("pvScroll"), fit = $("paperFit"), paper = $("paper");
+    if (!scroll || !fit || !paper) return;
+    var natural = paper.offsetWidth;
+    if (!natural) return;
+    var avail = scroll.clientWidth - 32; // .preview-scroll 左右各 16px
+    var scale = fitMode ? Math.min(1, avail / natural) : 1;
+    if (!isFinite(scale) || scale <= 0) scale = 1;
+    paper.style.transform = "scale(" + scale + ")";
+    fit.style.width = Math.ceil(natural * scale) + "px";
+    fit.style.height = Math.ceil(paper.offsetHeight * scale) + "px";
+    $("btnFitPreview").classList.toggle("primary", fitMode);
+    $("btnFullPreview").classList.toggle("primary", !fitMode);
   }
 
   function locateField(name) {
@@ -1563,6 +1637,9 @@
         if (!scopeState[axis] && suggested[axis]) scopeState[axis] = suggested[axis];
       });
       customFields = loadCustom();
+      restoreState();
+      restoreSuggestions();
+      var reopen = restoreViewState();
 
       $("loading").classList.add("hidden");
       updateTemplateLine();
@@ -1570,6 +1647,10 @@
       notice("已读取抽取结果。请先确认上方三项项目类型，字段区会按所选类型加载。");
 
       // 选齐三项才拉对应字段集；没选齐时显示 gate，不套用任何过滤口径
+      // 面板先恢复可见，不用等字段集加载完；applyScope 完成后 loadFields
+      // 会再刷新一次预览，避免切页回来先空一段再跳出预览栏。
+      if (reopen) setPreviewOpen(true, false);
+      else applyPreviewScale();
       await applyScope();
     } catch (err) {
       $("loading").classList.add("hidden");
@@ -1615,6 +1696,7 @@
       })
       .then(function (data) {
         suggestions = data.suggestions || {};
+        saveSuggestions();
         renderActiveGroup();
         toast(data.count
           ? "已起草 " + data.count + " 条建议值（黄色提示条），逐条确认后采纳"
@@ -1633,6 +1715,13 @@
 
   $("btnPreview").addEventListener("click", function () { setPreviewOpen(!previewOpen); });
   $("btnClosePreview").addEventListener("click", function () { setPreviewOpen(false); });
+  $("btnFitPreview").addEventListener("click", function () {
+    fitMode = true; saveViewState(); applyPreviewScale();
+  });
+  $("btnFullPreview").addEventListener("click", function () {
+    fitMode = false; saveViewState(); applyPreviewScale();
+  });
+  window.addEventListener("resize", applyPreviewScale);
   $("btnRefreshPreview").addEventListener("click", refreshPreview);
   $("btnGenerate2").addEventListener("click", generate);
   $("pvOnlyMissing").addEventListener("change", renderPreview);

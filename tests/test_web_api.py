@@ -29,6 +29,12 @@ def server(service):
     httpd.shutdown()
 
 
+@pytest.fixture()
+def quiet_log(monkeypatch):
+    """启动对账会写 data/web.log；测试里换成空操作，不碰用户真机目录。"""
+    monkeypatch.setattr("tender_extractor.web._log", lambda message: None)
+
+
 def _get(url: str) -> tuple[int, dict]:
     try:
         with urllib.request.urlopen(url, timeout=10) as resp:
@@ -51,6 +57,76 @@ def _post(url: str, payload: dict) -> tuple[int, dict]:
         body = exc.read()
         exc.close()
         return exc.code, json.loads(body.decode("utf-8") or "{}")
+
+
+def test_orphan_jobs_interrupted_on_service_startup(tmp_path, quiet_log):
+    """重启后 DB 里没有执行线程的 queued/running 任务必须标为中断，避免首页误显示「正在解析」。"""
+    db = Database(tmp_path / "tender.db")
+    db.create_job("orphan-run", "extract", "需求.docx", None, True, False,
+                  status="running", stage="解析文档并抽取字段")
+    db.create_job("orphan-queue", "extract", "需求.docx", None, True, False,
+                  status="queued", stage="排队中")
+    db.create_job("orphan-cmp", "compare", "比对.docx", None, True, False,
+                  status="running", stage="抽取招标要求")
+    db.create_job("finished", "extract", "需求.docx", None, True, False)
+    db.update_job("finished", status="done", stage="完成")
+
+    service = Service(output_dir=tmp_path / "out", db=db)
+
+    for job_id in ("orphan-run", "orphan-queue", "orphan-cmp"):
+        row = db.get_job(job_id)
+        assert row["status"] == "error"
+        assert row["stage"] == "已中断"
+        assert "重新上传" in row["error"]
+        assert row["finished_at"]
+    assert db.get_job("finished")["status"] == "done"
+    assert db.get_job("finished")["stage"] == "完成"
+    assert [j for j in db.list_jobs() if j["status"] in {"queued", "running"}] == []
+    restored = service.get("orphan-run")
+    assert restored is not None and restored.status == "error"
+
+
+def test_startup_reconcile_keeps_finished_statuses(tmp_path, quiet_log):
+    """已结束的任务不在对账范围内，done/error/skipped 都不该被改写。"""
+    db = Database(tmp_path / "tender.db")
+    for job_id, status in (("done-job", "done"), ("error-job", "error"),
+                           ("skip-job", "skipped")):
+        db.create_job(job_id, "extract", "需求.docx", None, True, False,
+                      status=status, stage="原有阶段")
+    db.create_job("orphan", "extract", "需求.docx", None, True, False, status="running")
+
+    Service(output_dir=tmp_path / "out", db=db)
+
+    for job_id, status in (("done-job", "done"), ("error-job", "error"),
+                           ("skip-job", "skipped")):
+        row = db.get_job(job_id)
+        assert row["status"] == status
+        assert row["stage"] == "原有阶段"
+    assert db.get_job("orphan")["status"] == "error"
+
+
+def test_startup_reconcile_is_idempotent(tmp_path, quiet_log):
+    """同一个 DB 重复构造 Service 不应重复对账、也不改已中断任务的时间。"""
+    db = Database(tmp_path / "tender.db")
+    db.create_job("orphan", "extract", "需求.docx", None, True, False, status="running")
+    Service(output_dir=tmp_path / "out", db=db)
+    first = db.get_job("orphan")["finished_at"]
+
+    Service(output_dir=tmp_path / "out", db=db)
+
+    assert db.get_job("orphan")["finished_at"] == first
+
+
+def test_second_service_does_not_interrupt_new_running_job(tmp_path, quiet_log):
+    """对账只在进程首次接触该 DB 时做；之后提交的运行中任务不该被误伤。"""
+    db = Database(tmp_path / "tender.db")
+    Service(output_dir=tmp_path / "out", db=db)
+    db.create_job("running-now", "extract", "需求.docx", None, True, False,
+                  status="running", stage="解析文档并抽取字段")
+
+    Service(output_dir=tmp_path / "out", db=db)
+
+    assert db.get_job("running-now")["status"] == "running"
 
 
 def test_project_api_crud(server):
