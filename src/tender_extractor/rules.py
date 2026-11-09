@@ -28,6 +28,26 @@ from .cleaning import (
 )
 from .document import Document
 from .models import Block, Candidate, Evidence
+from .table_profile import (
+    KIND_CLAUSES,
+    KIND_ITEMS,
+    KIND_KV,
+    KIND_UNKNOWN,
+    TableProfile,
+    ROLE_AMOUNT,
+    ROLE_CATEGORY,
+    ROLE_LABEL,
+    ROLE_MARKER,
+    ROLE_NAME,
+    ROLE_QUANTITY,
+    ROLE_REQUIREMENT,
+    ROLE_SEQ,
+    ROLE_UNIT,
+    ROLE_UNIT_PRICE,
+    ROLE_VALUE,
+    profile_document,
+    profile_table,
+)
 
 
 @dataclass
@@ -420,7 +440,35 @@ def find_project_table(doc: Document) -> tuple[dict[str, str], Block] | None:
     return None
 
 
-def find_business_table(doc: Document) -> tuple[dict[str, str], Block] | None:
+#: 商务要求标签的语义词素：命中就归一化到模板键，未命中的标签保留原名。
+#: 放词素而不是完整列名，是为了覆盖「到货验收」「供货周期」这类没见过的组合。
+_BUSINESS_KEY_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("标的提供的时间", ("时间", "期限", "日期", "工期", "周期", "交货期", "供货期", "交付期")),
+    ("标的提供的地点", ("地点", "地址", "位置", "交付地", "交货地")),
+    ("付款方式", ("付款", "支付", "款项", "结算")),
+    ("验收要求", ("验收", "检验")),
+    ("履约保证金", ("保证金",)),
+    ("其他", ("其他", "其它", "备注")),
+)
+
+
+def _normalize_business_key(label: str) -> str:
+    """把同义标签映射到招标模板的键；认不出时原样返回，绝不丢弃。"""
+    text = normalize_for_match(label)
+    for key, words in _BUSINESS_KEY_WORDS:
+        if any(normalize_for_match(word) in text for word in words):
+            return key
+    return label
+
+
+def find_business_table(
+    doc: Document, profiles: list[TableProfile] | None = None
+) -> tuple[dict[str, str], Block] | None:
+    """商务要求表：精确列名走快速路径，换写法时由表格画像兜底。
+
+    精确列名命中率最高，保留为快速路径；画像路径只要求「第一列标签、第二列值」
+    这一形态，标签用语义词素归一化，未命中的原样保留，避免静默丢表。
+    """
     known = {
         "标的提供的时间", "标的提供的地点", "付款方式", "验收要求",
         "履约保证金", "响应有效期", "其他", "服务期限", "交付时间", "交付地点",
@@ -437,6 +485,31 @@ def find_business_table(doc: Document) -> tuple[dict[str, str], Block] | None:
                 pairs[label] = clean_text(row[1])
         if len(pairs) >= 3:
             return pairs, block
+
+    if profiles is None:
+        profiles = profile_document(doc)
+    for profile in profiles:
+        if profile.kind != KIND_KV:
+            continue
+        label_idx = profile.role_index(ROLE_LABEL)
+        value_idx = profile.role_index(ROLE_VALUE)
+        if label_idx is None or value_idx is None:
+            continue
+        pairs = {}
+        for row in profile.data_rows():
+            if max(label_idx, value_idx) >= len(row):
+                continue
+            label = strip_numbering(clean_cell(row[label_idx]))
+            value = clean_text(row[value_idx])
+            if not label or not value:
+                continue
+            key = _normalize_business_key(label)
+            pairs[label] = value  # 原标签始终保留，供审核报告与自定义字段承接
+            if key != label:
+                prior = pairs.get(key)
+                pairs[key] = f"{prior}；{value}" if prior and prior != value else value
+        if len(pairs) >= 2:
+            return pairs, profile.block
     return None
 
 
@@ -473,9 +546,25 @@ def find_items_table(doc: Document) -> tuple[list[dict[str, Any]], Decimal | Non
         idx_unit = _header_index(header, ["单位"])
         idx_price = _header_index(header, ["单价"])
         idx_amount = _header_index(header, ["金额", "总价", "合计价"])
-        # 单价列可以缺省（不少需求报告只给金额），只要名称/数量/金额齐全就能成表。
+        data_rows: list[list[str]] = block.rows[1:]
+        # 列名齐全走强提示路径；缺列时改用表格画像按值特征推断，不再整表丢弃。
+        # 单价/金额列缺失是合法的（很多标的信息表只给数量与单位），留空即可，
+        # 不能用预算倒推分项价格，否则成稿会出现原文没有的价格。
         if None in (idx_name, idx_qty, idx_amount):
-            continue
+            profile = profile_table(block)
+            if profile.kind != KIND_ITEMS:
+                continue
+            idx_seq = profile.role_index(ROLE_SEQ)
+            idx_name = profile.role_index(ROLE_NAME)
+            idx_category = profile.role_index(ROLE_CATEGORY)
+            idx_req = profile.role_index(ROLE_REQUIREMENT)
+            idx_qty = profile.role_index(ROLE_QUANTITY)
+            idx_unit = profile.role_index(ROLE_UNIT)
+            idx_price = profile.role_index(ROLE_UNIT_PRICE)
+            idx_amount = profile.role_index(ROLE_AMOUNT)
+            data_rows = profile.data_rows()
+            if idx_name is None:
+                continue
 
         def cell(row: list[str], idx: int | None) -> str:
             if idx is None or idx >= len(row):
@@ -486,7 +575,7 @@ def find_items_table(doc: Document) -> tuple[list[dict[str, Any]], Decimal | Non
         current: dict[str, Any] | None = None
         declared_total: Decimal | None = None
 
-        for raw_row in block.rows[1:]:
+        for raw_row in data_rows:
             row = [clean_cell(c) for c in raw_row]
             if not any(row):
                 continue
@@ -582,8 +671,10 @@ def find_items_table(doc: Document) -> tuple[list[dict[str, Any]], Decimal | Non
 # ---------------------------------------------------------------------------
 
 
-def extract_business_requirements(doc: Document) -> tuple[dict[str, str], Block | None]:
-    found = find_business_table(doc)
+def extract_business_requirements(
+    doc: Document, profiles: list[TableProfile] | None = None
+) -> tuple[dict[str, str], Block | None]:
+    found = find_business_table(doc, profiles)
     if not found:
         return {}, None
     pairs, block = found
@@ -826,6 +917,63 @@ def extract_star_clauses(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return clauses
 
 
+def _cell_at(row: list[str], index: int | None) -> str:
+    """按推断出的列号安全取值；合并单元格产生的短行不该让整条条款丢失。"""
+    if index is None or index >= len(row):
+        return ""
+    return clean_cell(row[index])
+
+
+def extract_tech_clauses_from_doc(
+    doc: Document, profiles: list[TableProfile] | None = None
+) -> list[dict[str, Any]]:
+    """从「符号列 + 指标要求列」的条款表独立抽取技术参数，不依赖采购标的。
+
+    为什么独立于 items：旧实现把 ★▲ 当作标的子项文本的属性，标的清单一旦因
+    表头变体解析失败，整张技术参数表会连带清零。这里按表形态直接读，一般参数
+    （无 ★▲）也保留，并用表内的分组标题行归属到对应标的附表。
+    """
+    clauses: list[dict[str, Any]] = []
+    if profiles is None:
+        profiles = profile_document(doc)
+    for profile in profiles:
+        if profile.kind != KIND_CLAUSES:
+            continue
+        req_idx = profile.role_index(ROLE_REQUIREMENT)
+        if req_idx is None:
+            continue
+        marker_idx = profile.role_index(ROLE_MARKER)
+        seq_idx = profile.role_index(ROLE_SEQ)
+        group_idx = profile.role_index(ROLE_NAME)
+        group = ""
+        for row in profile.data_rows():
+            requirement = clean_text(_cell_at(row, req_idx))
+            seq = _cell_at(row, seq_idx)
+            group_cell = _cell_at(row, group_idx)
+            marker_cell = _cell_at(row, marker_idx)
+            if not requirement and group_cell and not seq:
+                group = group_cell
+                continue
+            if not requirement:
+                continue
+            mark = marker_cell[0] if marker_cell and marker_cell[0] in "★▲" else ""
+            if not mark and requirement[0] in "★▲":
+                mark = requirement[0]
+                requirement = requirement[1:].strip(" ：:，,、")
+            quote = " | ".join(clean_cell(cell) for cell in row if clean_cell(cell))
+            clauses.append(
+                {
+                    "type": mark,
+                    "text": requirement[:500],
+                    "item_seq": "",
+                    "item_name": group,
+                    "block_id": profile.block.id,
+                    "quote": quote[:800],
+                }
+            )
+    return clauses
+
+
 # ---------------------------------------------------------------------------
 # 单字段规则
 # ---------------------------------------------------------------------------
@@ -913,6 +1061,8 @@ def _looks_like_purchaser_address(place: str, purchaser_name: str) -> bool:
 def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutput:
     kvs = collect_kvs(doc)
     output = RulesOutput(kvs=kvs)
+    # 单次全量画像，商务表/条款表/审计复用，避免重复扫全表。
+    profiles = profile_document(doc)
 
     project_table_found = find_project_table(doc)
     project_table: dict[str, str] = {}
@@ -920,7 +1070,7 @@ def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutp
     if project_table_found:
         project_table, project_block = project_table_found
 
-    business, business_block = extract_business_requirements(doc)
+    business, business_block = extract_business_requirements(doc, profiles)
     items_found = find_items_table(doc)
     items: list[dict[str, Any]] = []
     declared_total: Decimal | None = None
@@ -1266,7 +1416,31 @@ def extract_rules(doc: Document, fields: dict[str, dict[str, Any]]) -> RulesOutp
     )
     output.structured["delivery"] = delivery
 
-    output.structured["star_clauses"] = extract_star_clauses(items)
+    output.structured["table_profiles"] = [profile.to_dict() for profile in profiles]
+    output.structured["unmapped_tables"] = [
+        profile.to_dict() for profile in profiles if profile.kind == KIND_UNKNOWN
+    ]
+
+    # 技术参数独立成表：一般参数保留在 tech_clauses，★▲ 同时并入 star_clauses，
+    # 这样标的清单解析失败时实质性条款不会跟着一起消失。
+    tech_clauses = extract_tech_clauses_from_doc(doc, profiles)
+    output.structured["tech_clauses"] = tech_clauses
+    star_clauses: list[dict[str, Any]] = extract_star_clauses(items)
+    for clause in star_clauses:
+        # 老路径产出的条款也要能回链原文，避免只有值没有证据。
+        if not clause.get("block_id"):
+            clause["block_id"] = items_block.id if items_block else ""
+            clause["quote"] = str(clause.get("text") or "")
+    seen_stars = {normalize_for_match(str(c.get("text") or "")) for c in star_clauses}
+    for clause in tech_clauses:
+        if not clause["type"]:
+            continue
+        key = normalize_for_match(clause["text"])
+        if key in seen_stars:
+            continue
+        seen_stars.add(key)
+        star_clauses.append(clause)
+    output.structured["star_clauses"] = star_clauses
 
     # 派生字段
     if items:

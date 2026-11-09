@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """web 项目工作台 / 设置 / 持久化恢复 API。"""
+from __future__ import annotations
 
 import json
 import threading
@@ -11,6 +12,63 @@ import pytest
 
 from tender_extractor.storage import Database
 from tender_extractor.web import Service, make_server
+
+
+def test_text_extraction_progress_and_restored_completion(service: Service, monkeypatch: pytest.MonkeyPatch) -> None:
+    """直接文字上传保持证据链；进度可观察，保存完成与重启恢复都显示 100%。"""
+    from tender_extractor import Extractor
+
+    # 暂停实际引擎的一个阶段，让测试确定地读到运行中进度，不依赖执行速度。
+    reached = threading.Event()
+    proceed = threading.Event()
+    extractor = Extractor(settings_override={"review": {"enabled": False}})
+    original = extractor.extract
+
+    def extract_with_pause(*args: object, **kwargs: object) -> object:
+        """只拦截阶段通知，文档读取、规则、证据校验仍调用真实实现。"""
+        callback = kwargs["on_progress"]
+
+        def notify(percent: int, stage: str) -> None:
+            callback(percent, stage)
+            if percent == 35:
+                reached.set()
+                assert proceed.wait(10)
+
+        kwargs["on_progress"] = notify
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(extractor, "extract", extract_with_pause)
+    monkeypatch.setattr(service, "_new_extractor", lambda: extractor)
+    payload = "采购需求报告\n一、项目概况\n项目名称：某服务采购项目\n采购方式：公开招标\n采购预算：100000元\n二、采购需求\n合同履行期限：一年"
+    job = service.submit("文字采购需求.txt", payload.encode("utf-8"), False, True)
+    try:
+        assert reached.wait(10)
+        assert job.public()["status"] == "running"
+        assert job.public()["progress"] == 35
+    finally:
+        proceed.set()
+    for _ in range(100):
+        row = service.db.get_job(job.id)
+        if row["status"] in {"done", "error"}:
+            break
+        time.sleep(0.05)
+    assert row["status"] == "done"
+    assert job.public()["progress"] == 100
+    assert job.result["fields"]["project_name"]["evidence"]
+    restored = Service(output_dir=service._output_dir, db=Database(service.db.db_path)).get(job.id)
+    assert restored.public()["progress"] == 100
+
+
+def test_progress_keeps_failure_below_completion(service: Service) -> None:
+    """读取损坏文件失败时保留已进入的读取阶段，不把失败渲染成完成。"""
+    from tender_extractor.web import Job
+    path = service._output_dir / "invalid.docx"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"invalid")
+    job = Job(id="failed-progress", filename="invalid.docx", use_llm=False, allow_non_tender=False)
+    service._run(job, path)
+    assert job.status == "error"
+    assert job.public()["progress"] == 5
 
 
 @pytest.fixture()
@@ -27,6 +85,12 @@ def server(service):
     t.start()
     yield f"http://127.0.0.1:{port}"
     httpd.shutdown()
+
+
+@pytest.fixture()
+def quiet_log(monkeypatch):
+    """启动对账会写 data/web.log；测试里换成空操作，不碰用户真机目录。"""
+    monkeypatch.setattr("tender_extractor.web._log", lambda message: None)
 
 
 def _get(url: str) -> tuple[int, dict]:
@@ -51,6 +115,126 @@ def _post(url: str, payload: dict) -> tuple[int, dict]:
         body = exc.read()
         exc.close()
         return exc.code, json.loads(body.decode("utf-8") or "{}")
+
+
+def test_orphan_jobs_interrupted_on_service_startup(tmp_path, quiet_log):
+    """重启后 DB 里没有执行线程的 queued/running 任务必须标为中断，避免首页误显示「正在解析」。"""
+    db = Database(tmp_path / "tender.db")
+    db.create_job("orphan-run", "extract", "需求.docx", None, True, False,
+                  status="running", stage="解析文档并抽取字段")
+    db.create_job("orphan-queue", "extract", "需求.docx", None, True, False,
+                  status="queued", stage="排队中")
+    db.create_job("orphan-cmp", "compare", "比对.docx", None, True, False,
+                  status="running", stage="抽取招标要求")
+    db.create_job("finished", "extract", "需求.docx", None, True, False)
+    db.update_job("finished", status="done", stage="完成")
+
+    service = Service(output_dir=tmp_path / "out", db=db)
+
+    for job_id in ("orphan-run", "orphan-queue", "orphan-cmp"):
+        row = db.get_job(job_id)
+        assert row["status"] == "error"
+        assert row["stage"] == "已中断"
+        assert "重新上传" in row["error"]
+        assert row["finished_at"]
+    assert db.get_job("finished")["status"] == "done"
+    assert db.get_job("finished")["stage"] == "完成"
+    assert [j for j in db.list_jobs() if j["status"] in {"queued", "running"}] == []
+    restored = service.get("orphan-run")
+    assert restored is not None and restored.status == "error"
+
+
+def test_startup_reconcile_keeps_finished_statuses(tmp_path, quiet_log):
+    """已结束的任务不在对账范围内，done/error/skipped 都不该被改写。"""
+    db = Database(tmp_path / "tender.db")
+    for job_id, status in (("done-job", "done"), ("error-job", "error"),
+                           ("skip-job", "skipped")):
+        db.create_job(job_id, "extract", "需求.docx", None, True, False,
+                      status=status, stage="原有阶段")
+    db.create_job("orphan", "extract", "需求.docx", None, True, False, status="running")
+
+    Service(output_dir=tmp_path / "out", db=db)
+
+    for job_id, status in (("done-job", "done"), ("error-job", "error"),
+                           ("skip-job", "skipped")):
+        row = db.get_job(job_id)
+        assert row["status"] == status
+        assert row["stage"] == "原有阶段"
+    assert db.get_job("orphan")["status"] == "error"
+
+
+def test_startup_reconcile_is_idempotent(tmp_path, quiet_log):
+    """同一个 DB 重复构造 Service 不应重复对账、也不改已中断任务的时间。"""
+    db = Database(tmp_path / "tender.db")
+    db.create_job("orphan", "extract", "需求.docx", None, True, False, status="running")
+    Service(output_dir=tmp_path / "out", db=db)
+    first = db.get_job("orphan")["finished_at"]
+
+    Service(output_dir=tmp_path / "out", db=db)
+
+    assert db.get_job("orphan")["finished_at"] == first
+
+
+def test_second_service_does_not_interrupt_new_running_job(tmp_path, quiet_log):
+    """对账只在进程首次接触该 DB 时做；之后提交的运行中任务不该被误伤。"""
+    db = Database(tmp_path / "tender.db")
+    Service(output_dir=tmp_path / "out", db=db)
+    db.create_job("running-now", "extract", "需求.docx", None, True, False,
+                  status="running", stage="解析文档并抽取字段")
+
+    Service(output_dir=tmp_path / "out", db=db)
+
+    assert db.get_job("running-now")["status"] == "running"
+
+
+def _delete(url: str) -> tuple[int, dict]:
+    """通过真实 DELETE 请求验证记录删除，不使用前端夹具替代 API 行为。"""
+    request = urllib.request.Request(url, method="DELETE")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        with exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+def test_delete_requirement_removes_record_values_and_cache(server: str, service: Service) -> None:
+    """删除完成任务后详情与列表都不可恢复，项目与其他任务的确认值保留。"""
+    project = service.db.create_project("某采购项目")["id"]
+    for job_id in ("delete-one", "keep-one"):
+        service.db.create_job(job_id, "extract", "某需求.txt", project, False, False)
+        service.db.update_job(job_id, status="done", stage="完成")
+        service.db.save_field_values(job_id, project, [{"key": "project_name", "value": "某需求"}])
+    # 先读入内存缓存，避免只验证数据库删除而漏掉旧详情仍可访问的问题。
+    assert _get(f"{server}/api/jobs/delete-one")[0] == 200
+    status, data = _delete(f"{server}/api/jobs/delete-one")
+    assert status == 200 and data == {"deleted": "delete-one"}
+    assert "delete-one" not in service.jobs
+    assert service.get("delete-one") is None
+    assert service.db.list_field_values("delete-one") == []
+    assert service.db.list_field_values("keep-one")
+    assert service.db.get_project(project) is not None
+    assert _get(f"{server}/api/jobs/delete-one")[0] == 404
+    assert [item["id"] for item in _get(f"{server}/api/jobs")[1]["jobs"]] == ["keep-one"]
+    assert _delete(f"{server}/api/jobs/delete-one")[0] == 404
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_delete_requirement_rejects_active_job(server: str, service: Service, status: str) -> None:
+    """解析线程运行期间不允许删除，避免结果回写后出现孤立记录或误报成功。"""
+    service.db.create_job("active-delete", "extract", "某需求.txt", None, False, False)
+    service.db.update_job("active-delete", status=status)
+    code, data = _delete(f"{server}/api/jobs/active-delete")
+    assert code == 409 and "解析中" in data["error"]
+    assert service.db.get_job("active-delete") is not None
+
+
+def test_delete_requirement_rejects_compare_job(server: str, service: Service) -> None:
+    """需求删除入口只作用于抽取记录，比对模块保持现有功能边界。"""
+    service.db.create_job("compare-delete", "compare", "某比对", None, False, False)
+    service.db.update_job("compare-delete", status="done")
+    assert _delete(f"{server}/api/jobs/compare-delete")[0] == 400
+    assert service.db.get_job("compare-delete") is not None
 
 
 def test_project_api_crud(server):
@@ -630,4 +814,233 @@ def test_find_soffice_falls_back_to_path(monkeypatch, tmp_path):
         "shutil.which", lambda name: str(fake) if name == "soffice" else None
     )
     assert web._find_soffice() == fake
+
+
+# ---------------------------------------------------------------------------
+# 对话入口：POST /api/chat/intent（只分类意图，不执行动作、不产出事实值）
+# ---------------------------------------------------------------------------
+
+
+class _IntentClient:
+    """意图兜底用的假模型客户端，返回固定 JSON。"""
+
+    def __init__(self, reply: dict) -> None:
+        self.reply = reply
+
+    def chat_json(self, system: str, user: str, schema=None) -> dict:
+        return self.reply
+
+
+def test_chat_intent_rules_do_not_touch_model(server, service) -> None:
+    """规则命中的指令与需求正文直接返回，接口只回白名单意图。"""
+    status, data = _post(server + "/api/chat/intent", {"text": "帮我生成招标文件"})
+    assert status == 200
+    assert data == {
+        "intent": "generate",
+        "matched_by": "rule",
+        "keyword": "生成招标文件",
+        "target": None,
+        "policy": {"risk": "high", "action": "execute", "reason": "不可逆或对外动作，建议先确认"},
+    }
+
+    content = (
+        "某单位物业管理服务采购项目，预算120万元，服务期一年，"
+        "要求投标人具备相应服务能力，不接受联合体投标。"
+    )
+    status, data = _post(server + "/api/chat/intent", {"text": content})
+    assert status == 200
+    assert data["intent"] == "extract" and data["matched_by"] == "rule"
+
+
+def test_chat_intent_llm_fallback_is_whitelisted(server, service, monkeypatch) -> None:
+    """规则未命中的指令交由模型兜底；模型越界输出被丢弃返回 unknown。"""
+    import tender_extractor.web as web
+
+    monkeypatch.setattr(service, "health", lambda: {"available": True})
+    monkeypatch.setattr(
+        web, "build_llm_client", lambda settings: _IntentClient({"intent": "missing"})
+    )
+    status, data = _post(server + "/api/chat/intent", {"text": "帮我搞定一下那个文件"})
+    assert status == 200
+    assert data == {
+        "intent": "missing",
+        "matched_by": "llm",
+        "keyword": "",
+        "target": None,
+        "policy": {"risk": "low", "action": "execute", "reason": "只读动作，直接执行"},
+    }
+
+    monkeypatch.setattr(
+        web, "build_llm_client", lambda settings: _IntentClient({"intent": "伪造字段值"})
+    )
+    status, data = _post(server + "/api/chat/intent", {"text": "帮我搞定一下那个文件"})
+    assert status == 200
+    assert data["intent"] == "unknown"
+
+
+def test_chat_intent_rejects_blank_text(server) -> None:
+    status, data = _post(server + "/api/chat/intent", {"text": "   "})
+    assert status == 400
+    assert "text" in data["error"]
+
+
+def test_chat_intent_offline_short_command_returns_unknown(server, service, monkeypatch) -> None:
+    """模型不可用时短指令回落 unknown，由前端给出能力说明，不报错。"""
+    monkeypatch.setattr(service, "health", lambda: {"available": False})
+    status, data = _post(server + "/api/chat/intent", {"text": "帮我看看那个"})
+    assert status == 200
+    assert data["intent"] == "unknown"
+    assert data["matched_by"] == "fallback"
+
+
+def test_chat_intent_input_boundaries(server, service, monkeypatch) -> None:
+    """输入边界：非字符串、超长文本都明确 400，不进模型。"""
+    monkeypatch.setattr(service, "health", lambda: {"available": False})
+    status, data = _post(server + "/api/chat/intent", {"text": 123})
+    assert status == 400 and "text" in data["error"]
+    status, data = _post(server + "/api/chat/intent", {"text": "采购需求" * 600})
+    assert status == 400 and "2000" in data["error"]
+
+
+def test_chat_intent_classifier_failure_degrades(server, service, monkeypatch) -> None:
+    """分类组件异常时降级为 unknown（200），对话入口不中断、不执行动作。"""
+    def broken(text: str):
+        raise RuntimeError("模型挂了")
+
+    monkeypatch.setattr(service, "classify_chat_intent", broken)
+    status, data = _post(server + "/api/chat/intent", {"text": "查看解析结果"})
+    assert status == 200
+    assert data == {
+        "intent": "unknown",
+        "matched_by": "fallback",
+        "keyword": "分类服务降级",
+        "target": None,
+        "policy": {"risk": "none", "action": "refuse", "reason": "越界或无法确认"},
+    }
+
+
+def test_chat_intent_resolves_local_path_target(server) -> None:
+    """路径句要给出 path 槽位，而不是让界面把整句当需求正文打包。"""
+    path = "D:\\新建文件夹\\01-笼盒自动化处理系统采购项目采购需求 (1).docx"
+    text = '我要抽取"' + path + '"的结构化字段并附上原文。'
+
+    status, data = _post(server + "/api/chat/intent", {"text": text})
+    assert status == 200
+    assert data["intent"] == "extract"
+    assert data["target"] == {"type": "path", "value": path}
+
+
+def test_chat_intent_extract_without_target_asks_back(server) -> None:
+    """只说「帮我解析那个文件」时 target 留空，由界面反问而不是创建任务。"""
+    status, data = _post(server + "/api/chat/intent", {"text": "帮我解析那个文件"})
+    assert status == 200
+    assert data["intent"] == "extract"
+    assert data["target"] is None
+
+
+# ---------------------------------------------------------------------------
+# 对话入口「路径直达」：POST /api/extract?source_path= 由本机服务代读磁盘文件
+# ---------------------------------------------------------------------------
+
+
+def _post_empty(url: str) -> tuple[int, dict]:
+    """无 body 的 POST，对应前端路径直达时只带 query、不带文件的请求。"""
+    req = urllib.request.Request(url, data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read()
+        exc.close()
+        return exc.code, json.loads(body.decode("utf-8") or "{}")
+
+
+def test_extract_by_source_path_reads_local_file(server, tmp_path) -> None:
+    """路径直达：本机服务按路径读文件并走同一抽取链路，回显真实文件名。"""
+    from urllib.parse import quote
+
+    from test_llm_pipeline import _build_requirement_docx
+
+    docx = tmp_path / "需求报告-路径直达.docx"
+    _build_requirement_docx(docx)
+
+    url = f"{server}/api/extract?source_path={quote(str(docx))}&use_llm=0"
+    status, data = _post_empty(url)
+    assert status == 202
+    assert data["filename"] == "需求报告-路径直达.docx"
+    assert data["id"]
+
+
+def test_extract_by_source_path_rejects_missing(server, tmp_path) -> None:
+    """路径不存在要明确报错，不能当正文打包成文字任务。"""
+    from urllib.parse import quote
+
+    missing = tmp_path / "不存在的文件.docx"
+    status, data = _post_empty(
+        f"{server}/api/extract?source_path={quote(str(missing))}&use_llm=0"
+    )
+    assert status == 400
+    assert "不存在" in data["error"]
+
+
+def test_extract_by_source_path_rejects_unsupported_suffix(server, tmp_path) -> None:
+    """扩展名白名单外的一律拒绝，避免把任意文件当需求正文。"""
+    from urllib.parse import quote
+
+    bad = tmp_path / "脚本.exe"
+    bad.write_bytes(b"MZ")
+    status, data = _post_empty(
+        f"{server}/api/extract?source_path={quote(str(bad))}&use_llm=0"
+    )
+    assert status == 400
+    assert "不支持" in data["error"]
+
+
+def test_chat_intent_rules_survive_health_failure(server, service, monkeypatch) -> None:
+    """规则能判的指令不该依赖模型健康检查：health 挂了也必须正常分类。"""
+    def boom():
+        raise RuntimeError("模型服务不可用")
+
+    monkeypatch.setattr(service, "health", boom)
+    status, data = _post(server + "/api/chat/intent", {"text": "我要做招标文件"})
+    assert status == 200
+    assert data["intent"] == "generate"
+    assert data["matched_by"] == "rule"
+
+
+def test_chat_intent_returns_execution_policy(server, service, monkeypatch) -> None:
+    """策略随分类一起返回：缺对象要 ask，越界要 refuse。"""
+    monkeypatch.setattr(service, "health", lambda: {"available": False})
+
+    status, data = _post(server + "/api/chat/intent", {"text": "帮我解析那个文件"})
+    assert status == 200
+    assert data["policy"]["action"] == "ask"
+    assert data["policy"]["risk"] == "medium"
+
+    status, data = _post(server + "/api/chat/intent", {"text": "能不能写一首关于招标的诗"})
+    assert status == 200
+    assert data["policy"] == {"risk": "none", "action": "refuse", "reason": "越界或无法确认"}
+
+
+def test_chat_answer_falls_back_without_model(service, server, monkeypatch) -> None:
+    """表达层拿不到模型时返回固定话术，对话不报错、卡片不受影响。"""
+    monkeypatch.setattr(service, "health", lambda: {"available": False})
+    status, data = _post(
+        f"{server}/api/chat/answer",
+        {
+            "intent": "result",
+            "question": "结果怎么样",
+            "context": {"filename": "需求.docx", "status": "done", "summary": {"fields": 42}},
+        },
+    )
+    assert status == 200
+    assert data["matched_by"] in {"fallback", "disabled"}
+    assert "需求.docx" in data["answer"]
+
+
+def test_chat_answer_rejects_unknown_intent(server) -> None:
+    """帮助/删除等场景必须走固定话术，不允许借表达层改写。"""
+    status, data = _post(f"{server}/api/chat/answer", {"intent": "delete", "context": {}})
+    assert status == 400
+    assert "intent" in data["error"]
 

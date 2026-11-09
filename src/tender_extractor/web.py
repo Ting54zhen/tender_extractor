@@ -38,6 +38,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
+from .chat import MAX_TEXT_CHARS, ChatIntent, classify_intent
+from .chat_answer import ALLOWED_INTENTS, summarize as summarize_answer
 from .doc_generator import generate_tender_document
 from .field_scopes import axis_options, resolve
 from .llm_client import build_llm_client
@@ -55,18 +57,18 @@ PROJECT_ROOT = BASE_DIR.parent.parent
 
 
 def _resolve_frontend_dir() -> Path:
-    """解析前端目录：环境变量优先，其次项目根 frontend/，最后回退包内 static/。
+    """只分发构建后的前端，避免将源码、依赖和配置暴露给浏览器。
 
-    前端已从 Python 包中独立为顶层 ``frontend/`` 目录，供团队成员单独修改；
-    设置 ``TENDER_FRONTEND_DIR`` 可指向任意自定义前端目录。
+    环境变量指向自定义构建目录；源码运行使用 frontend/dist，冻结程序
+    使用包内 static。缺少构建时保留预期路径，由页面请求给出操作提示，
+    不影响无需 Web 界面的命令行功能或自动触发联网安装。
     """
     override = os.environ.get("TENDER_FRONTEND_DIR", "")
     if override:
         return Path(override)
-    default = PROJECT_ROOT / "frontend"
-    if default.is_dir():
-        return default
-    return BASE_DIR / "static"
+    if getattr(sys, "frozen", False):
+        return BASE_DIR / "static"
+    return PROJECT_ROOT / "frontend" / "dist"
 
 
 STATIC_DIR = _resolve_frontend_dir()
@@ -242,6 +244,7 @@ class Job:
     project_id: str | None = None
     status: str = "queued"          # queued | running | done | skipped | error
     stage: str = "排队中"
+    progress: int = 0              # 实际处理阶段的完成比例；仅结果保存成功后达到 100。
     error: str = ""
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
@@ -260,6 +263,7 @@ class Job:
         return {
             "id": self.id,
             "kind": "extract",
+            "progress": 100 if self.status in {"done", "skipped"} else self.progress,
             "project_id": self.project_id,
             "filename": self.filename,
             "status": self.status,
@@ -435,6 +439,13 @@ def _iso_to_ts(value: str | None) -> float | None:
         return None
 
 
+# 启动对账按数据库路径只做一次：同一进程里可能对同一个 DB 再建 Service
+# （测试的「模拟重启」、未来同进程多入口），第二个实例可能正带着活跃任务，
+# 重复对账会把它们误标为中断。不同 DB 各自仍需对账。
+_RECONCILE_LOCK = threading.Lock()
+_RECONCILED_DBS: set[str] = set()
+
+
 class Service:
     """任务队列 + 结果缓存 + SQLite 持久化。
 
@@ -459,6 +470,29 @@ class Service:
         self._health: dict[str, Any] | None = None
         self._health_at = 0.0
         self._groups: list[dict[str, Any]] | None = None
+        self._interrupt_orphan_jobs()
+
+    def _interrupt_orphan_jobs(self) -> None:
+        """把上次进程没跑完的任务标为「已中断」。
+
+        工作线程是 daemon，强制关窗或进程被结束时 ``_run`` 的 finally 不一定执行，
+        SQLite 会永久留下 queued/running。首页启动时会扫描进行中任务并自动恢复轮询，
+        这些没有线程推进的孤儿任务就表现为「还没上传就在解析」且永不结束。构造
+        Service 时内存 jobs 必为空，DB 里仍标进行中的只能属于上一次进程，因此启动
+        时做状态对账是唯一能区分「真在跑」与「僵尸任务」的位置。
+        """
+        key = str(self.db.db_path)
+        with _RECONCILE_LOCK:
+            if key in _RECONCILED_DBS:
+                return
+            _RECONCILED_DBS.add(key)
+        count = self.db.interrupt_unfinished_jobs(
+            stage="已中断",
+            error="程序在任务完成前退出，本次启动已将该任务标记为中断，请重新上传文件",
+            finished_at=datetime.now().isoformat(timespec="seconds"),
+        )
+        if count:
+            _log(f"[web] 启动时中断 {count} 个未完成任务（进程退出时未回写状态）")
 
     # ------------------------------------------------------------------
     # 配置与健康检查
@@ -618,6 +652,97 @@ class Service:
             self._health = data
             self._health_at = now
         return data
+
+    def classify_chat_intent(self, text: str) -> ChatIntent:
+        """对话入口的意图识别：规则优先，模型只兜底分类。
+
+        规则能判的输入不碰模型和健康检查——这类输入本该「笨而确定」，
+        不该被模型服务的可用性拖慢或拖垮（health 抛异常时也要照常分类）；
+        只有规则判不出的短指令才问模型。模型结果受白名单与执行策略约束，
+        不产出任何事实值，证据约束仍由抽取链路负责。
+        """
+        rule_only = classify_intent(text)
+        if rule_only.matched_by == "rule":
+            return rule_only
+        settings = self.settings().get("llm", {})
+        client = None
+        try:
+            if self.health().get("available"):
+                timeout = min(int(settings.get("timeout_seconds", 180)), 30)
+                client = build_llm_client({**settings, "timeout_seconds": timeout})
+        except Exception:  # noqa: BLE001 - 健康检查或配置异常时退回纯规则
+            client = None
+        return classify_intent(text, client) if client else rule_only
+
+    def chat_answer(
+        self,
+        intent: str,
+        question: str,
+        context: Any,
+        *,
+        client: Any = None,
+    ) -> dict[str, Any]:
+        """把已算好的结构化结果改写成自然中文；越界或异常一律回落固定话术。
+
+        与意图分类同源：只在模型健康时参与，超时压到交互可接受范围；
+        生成内容必须通过数字白名单与承诺措辞校验，模型不产出新的字段值。
+        """
+        config = self.settings().get("chat_summary") or {}
+        enabled = bool(config.get("enabled", True))
+        max_chars = int(config.get("max_chars", 320))
+        fallback = self._chat_fallback(intent, context)
+        if client is None and enabled:
+            client = self._chat_client(config)
+        result = summarize_answer(
+            client,
+            intent=intent,
+            question=question,
+            context=context,
+            fallback=fallback,
+            max_chars=max_chars,
+            enabled=enabled,
+        )
+        return {
+            "answer": result.answer,
+            "matched_by": result.matched_by,
+            "model": result.model,
+            "reason": result.reason,
+        }
+
+    def _chat_client(self, config: dict[str, Any]) -> Any:
+        """表达层可用的模型客户端；健康检查不通过就返回 None 走固定话术。"""
+        if not self.health().get("available"):
+            return None
+        settings = self.settings().get("llm", {})
+        try:
+            timeout = min(
+                int(settings.get("timeout_seconds", 180)),
+                int(config.get("timeout_seconds", 20)),
+            )
+            return build_llm_client({**settings, "timeout_seconds": timeout})
+        except Exception:  # noqa: BLE001 - 配置异常时不让对话入口中断
+            return None
+
+    @staticmethod
+    def _chat_fallback(intent: str, context: Any) -> str:
+        """固定话术兜底：不依赖模型，保证任何情况下都有可读的说明。"""
+        data = context if isinstance(context, dict) else {}
+        if intent == "result":
+            name = str(data.get("filename") or "该记录")
+            if data.get("status") == "done":
+                return f"「{name}」的解析结果已生成，下面按字段分组展示；每条结论都可回到原文证据核对。"
+            return f"「{name}」当前状态：{data.get('status') or '未知'}，详情见下方卡片。"
+        if intent == "missing":
+            total = data.get("total")
+            if isinstance(total, int):
+                return f"待人工复核 {total} 项，请结合原文证据确认后再定稿。"
+            return "以下字段需要人工复核，请结合原文证据确认。"
+        if intent == "jobs":
+            total = data.get("total")
+            if isinstance(total, int):
+                return f"共 {total} 条解析记录，点击可查看结果或继续填写。"
+            return "以下是解析记录，点击可查看结果或继续填写。"
+        return "结果已获取，详见下方卡片。"
 
     # ------------------------------------------------------------------
     # 填写工作台：字段分组与招标文件生成
@@ -1187,6 +1312,24 @@ class Service:
         ).start()
         return job
 
+    def delete_requirement(self, job_id: str) -> bool:
+        """删除已结束的需求记录和确认值；保留用户已下载 / 保存的本机文档。
+
+        活跃任务不能删除，避免后台线程继续写入结果；数据库与内存缓存
+        在同一锁内移除，确保删除成功后不会再通过缓存取回旧详情。
+        """
+        job = self.get(job_id)
+        if job is None:
+            return False
+        if isinstance(job, CompareJob):
+            raise ValueError("该接口仅支持删除需求解析记录")
+        if job.status in {"queued", "running"}:
+            raise RuntimeError("需求正在解析中，请等待结束后再删除")
+        with self.lock:
+            deleted = self.db.delete_job(job_id)
+            self.jobs.pop(job_id, None)
+        return deleted
+
     def get(self, job_id: str) -> Job | CompareJob | None:
         with self.lock:
             job = self.jobs.get(job_id)
@@ -1257,6 +1400,12 @@ class Service:
             self.jobs.pop(old.id, None)
 
     def _run(self, job: Job, path: Path) -> None:
+        """将引擎里程碑暴露给轮询接口；模型等待期间不虚构时间进度。"""
+        def update_progress(percent: int, stage: str) -> None:
+            """仅在实际进入新阶段时前进，失败时保留最后一个已知百分比。"""
+            job.progress = max(job.progress, min(99, percent))
+            job.stage = stage
+
         job.status = "running"
         job.stage = "解析文档并抽取字段"
         self.db.update_job(job.id, status="running", stage=job.stage)
@@ -1266,7 +1415,9 @@ class Service:
                 path,
                 use_llm=job.use_llm,
                 allow_non_tender=job.allow_non_tender,
+                on_progress=update_progress,
             )
+            update_progress(95, "解析完成，正在保存结果与审核报告")
             data = result.to_dict()
             report = render_markdown(result)
 
@@ -1289,6 +1440,7 @@ class Service:
             )
             job.status = "skipped" if data.get("meta", {}).get("extraction_skipped") else "done"
             job.stage = "已跳过" if job.status == "skipped" else "完成"
+            job.progress = 100
         except Exception as exc:
             job.status = "error"
             job.stage = "失败"
@@ -1449,7 +1601,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in {"/templates", "/templates.html"}:
             return self._serve_static("templates.html")
         if path.startswith("/assets/"):
-            return self._serve_static(path[len("/assets/"):])
+            return self._serve_static(path.lstrip("/"))
         if path.startswith("/api/templates"):
             return self._handle_template_get(path)
         if path == "/api/health":
@@ -1498,6 +1650,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_settings_save()
         if parsed.path == "/api/company":
             return self._handle_company_save()
+        if parsed.path == "/api/chat/intent":
+            return self._handle_chat_intent()
+        if parsed.path == "/api/chat/answer":
+            return self._handle_chat_answer()
         if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/generate"):
             return self._handle_generate(parsed.path)
         if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/confirm"):
@@ -1519,6 +1675,10 @@ class Handler(BaseHTTPRequestHandler):
         allow = (query.get("allow_non_tender") or ["0"])[0] in {"1", "true", "yes"}
         project_id = (query.get("project_id") or [None])[0] or None
 
+        source_path = (query.get("source_path") or [None])[0]
+        if source_path:
+            return self._extract_from_source_path(source_path, use_llm, allow, project_id)
+
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -1537,14 +1697,71 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"error": str(exc)}, 400)
         return self._send_json(job.public(), 202)
 
+    def _extract_from_source_path(
+        self, raw: str, use_llm: bool, allow: bool, project_id: str | None
+    ) -> None:
+        """路径直达：本机服务代读磁盘文件，走与上传完全相同的抽取链路。
+
+        浏览器页面受沙箱限制读不了任意路径，对话里说「解析 D:\\xxx.docx」只能
+        由本机后端代读。为不把它变成远程任意文件读取，这里只在回环地址启用：
+        服务若被改绑 0.0.0.0，本接口直接拒绝。扩展名与大小与上传同款校验。
+        """
+        host = self.server.server_address[0] if self.server.server_address else ""
+        if host not in {"127.0.0.1", "::1", "localhost"}:
+            return self._send_json({"error": "路径直达仅在本机服务可用，请改用上传文件。"}, 403)
+        path = Path(raw.strip().strip('"').strip("'"))
+        if not path.is_absolute():
+            return self._send_json({"error": f"仅支持绝对路径：{raw}"}, 400)
+        if not path.exists() or not path.is_file():
+            return self._send_json({"error": f"文件不存在或不是文件：{path}"}, 400)
+        suffix = path.suffix.lower()
+        if suffix not in ALLOWED_SUFFIXES:
+            return self._send_json(
+                {
+                    "error": (
+                        f"不支持的文件类型 {suffix or '（无扩展名）'}，仅支持 "
+                        + "、".join(sorted(ALLOWED_SUFFIXES))
+                    )
+                },
+                400,
+            )
+        size = path.stat().st_size
+        if size <= 0:
+            return self._send_json({"error": "文件内容为空。"}, 400)
+        if size > MAX_UPLOAD_BYTES:
+            return self._send_json(
+                {"error": f"文件超过上限 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB"}, 413
+            )
+        try:
+            payload = path.read_bytes()
+        except OSError as exc:
+            return self._send_json({"error": f"读取文件失败：{exc}"}, 400)
+        try:
+            job = self.service.submit(path.name, payload, use_llm, allow, project_id)
+        except ValueError as exc:
+            return self._send_json({"error": str(exc)}, 400)
+        return self._send_json(job.public(), 202)
+
     # ------------------------------------------------------------------
     # 项目工作台
     # ------------------------------------------------------------------
 
     def do_DELETE(self) -> None:  # noqa: N802
+        """删除接口保持资源路径精确匹配，不让附加子路径误删任务。"""
         parsed = urlparse(self.path)
         if re.fullmatch(r"/api/templates/[^/]+", parsed.path):
             return self._handle_template_delete(parsed.path)
+        if re.fullmatch(r"/api/jobs/[^/]+", parsed.path):
+            job_id = parsed.path.rsplit("/", 1)[1]
+            try:
+                deleted = self.service.delete_requirement(job_id)
+            except ValueError as exc:
+                return self._send_json({"error": str(exc)}, 400)
+            except RuntimeError as exc:
+                return self._send_json({"error": str(exc)}, 409)
+            if not deleted:
+                return self._send_json({"error": "任务不存在"}, 404)
+            return self._send_json({"deleted": job_id})
         return self._send_json({"error": "未找到该路径"}, 404)
 
     # ------------------------------------------------------------------
@@ -1860,6 +2077,7 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_static("index.html")
 
     MIME_TYPES = {
+        ".txt": "text/plain; charset=utf-8",
         ".html": "text/html; charset=utf-8",
         ".css": "text/css; charset=utf-8",
         ".js": "text/javascript; charset=utf-8",
@@ -1871,11 +2089,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_static(self, name: str) -> None:
         target = (STATIC_DIR / name).resolve()
-        # 只允许静态目录内的文件，防目录穿越
-        if not str(target).startswith(str(STATIC_DIR.resolve())):
+        # 用路径层级判断，防止同名前缀的兄弟目录绕过检查。
+        if not target.is_relative_to(STATIC_DIR.resolve()):
             return self._send_json({"error": "非法路径"}, 403)
         if not target.is_file():
-            return self._send_json({"error": f"缺少前端文件：{target}"}, 500)
+            if name.endswith(".html"):
+                return self._send_json({"error": "缺少前端构建产物，请在 frontend 目录执行 npm ci 和 npm run build；自定义目录请检查 TENDER_FRONTEND_DIR。"}, 503)
+            return self._send_json({"error": "静态资源不存在"}, 404)
         body = target.read_bytes()
         mime = self.MIME_TYPES.get(target.suffix.lower(), "text/html; charset=utf-8")
         self.send_response(200)
@@ -1994,6 +2214,53 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"error": str(exc)}, 409)
         except Exception as exc:  # noqa: BLE001
             return self._send_json({"error": f"建议起草失败：{exc}"}, 500)
+        return self._send_json(data)
+
+    def _handle_chat_intent(self) -> None:
+        """对话入口意图识别：POST /api/chat/intent {"text": "..."}。
+
+        只做意图分类，不执行任何动作；前端拿到意图后调用既有接口，
+        执行结果（含证据）仍来自抽取链路，模型不参与事实产出。
+        """
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json({"error": "请求体不是合法 JSON 对象"}, 400)
+        text = body.get("text")
+        # 输入边界：只收一条指令/一小段文字，避免把整篇文档塞进分类接口。
+        if not isinstance(text, str) or not text.strip():
+            return self._send_json({"error": "text 必须是非空字符串"}, 400)
+        if len(text.strip()) > MAX_TEXT_CHARS:
+            return self._send_json({"error": f"text 不能超过 {MAX_TEXT_CHARS} 字符"}, 400)
+        try:
+            intent = self.service.classify_chat_intent(text)
+        except Exception:  # noqa: BLE001 - 分类组件失败降级，不让对话入口报错中断
+            intent = ChatIntent(intent="unknown", matched_by="fallback", keyword="分类服务降级")
+        return self._send_json(intent.to_dict())
+
+    def _handle_chat_answer(self) -> None:
+        """对话表达层：POST /api/chat/answer {intent, question, context}。
+
+        只接受展示型场景；越界、模型不可用或校验失败都返回固定话术（200），
+        前端拿 answer 替换气泡文本，卡片与证据不受影响。
+        """
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json({"error": "请求体不是合法 JSON 对象"}, 400)
+        intent = body.get("intent")
+        if intent not in ALLOWED_INTENTS:
+            return self._send_json({"error": "intent 不在允许范围"}, 400)
+        question = body.get("question")
+        if question is not None and not isinstance(question, str):
+            return self._send_json({"error": "question 必须是字符串"}, 400)
+        context = body.get("context")
+        if not isinstance(context, (dict, list)):
+            return self._send_json({"error": "context 必须是对象或数组"}, 400)
+        try:
+            data = self.service.chat_answer(intent, (question or "").strip()[:500], context)
+        except Exception as exc:  # noqa: BLE001 - 表达层失败不影响用户拿到结果
+            return self._send_json(
+                {"answer": "", "matched_by": "fallback", "model": "", "reason": str(exc)}
+            )
         return self._send_json(data)
 
     def _handle_analyze(self, path: str) -> None:

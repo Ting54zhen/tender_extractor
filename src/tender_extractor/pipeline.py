@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,6 @@ from .llm_extract import (
     evidence_supports_value,
     extract_group,
     repair_fields,
-    select_context,
 )
 from .llm_client import LLMClient, LLMError, build_llm_client
 from .reviewer import ReviewStats, resolve_settings, review_candidates
@@ -108,27 +108,46 @@ class Extractor:
         use_llm: bool = True,
         overrides: dict[str, Any] | None = None,
         allow_non_tender: bool = False,
+        on_progress: Callable[[int, str], None] | None = None,
     ) -> ExtractionResult:
+        """阶段完成后通知调用方；百分比表示流程里程碑，不推测模型剩余耗时。"""
+        def notify(percent: int, stage: str) -> None:
+            """可选回调让 CLI 和既有调用保持原行为，Web 则能报告实际阶段。"""
+            if on_progress is not None:
+                on_progress(percent, stage)
+
         start = time.perf_counter()
+        timing: dict[str, float] = {}
+        t0 = time.perf_counter()
         path = Path(path)
+        notify(5, "正在读取需求文档")
         doc = read_document(path)
         source = self._source_info(path, doc)
+        timing["read_document_ms"] = (time.perf_counter() - t0) * 1000
 
+        t0 = time.perf_counter()
+        notify(15, "文档已读取，正在识别文档类型")
         extraction_settings = self.settings.get("extraction", {})
         doc_type = classify_document(
             doc,
             float(extraction_settings.get("document_type_threshold", 4.0)),
         )
+        timing["classify_ms"] = (time.perf_counter() - t0) * 1000
         require_tender = bool(extraction_settings.get("require_tender_document", True))
         if require_tender and not allow_non_tender and not doc_type.is_tender:
+            notify(90, "文档类型检查结束，正在整理审核结果")
             return self._skipped_result(source, doc, doc_type, start)
 
+        t0 = time.perf_counter()
+        notify(25, "文档类型检查完成，正在抽取规则字段")
         rules_output = extract_rules(doc, self.field_defs)
+        timing["rules_ms"] = (time.perf_counter() - t0) * 1000
 
         merged: dict[str, Candidate] = dict(rules_output.candidates)
         conflicts: dict[str, dict[str, Any]] = {}
         attempts: dict[str, int] = {}
 
+        t0 = time.perf_counter()
         llm_settings = self.settings.get("llm", {})
         llm_stats = LLMStats(
             enabled=bool(use_llm and llm_settings.get("enabled", True)),
@@ -137,6 +156,7 @@ class Extractor:
         )
 
         client: LLMClient | None = None
+        notify(35, "规则抽取完成，正在处理模型补缺" if llm_stats.enabled else "规则抽取完成，正在整理字段")
         if llm_stats.enabled:
             try:
                 client = build_llm_client(llm_settings)
@@ -158,6 +178,7 @@ class Extractor:
         normalizations: list[dict[str, Any]] = []
         repair_audit: list[dict[str, Any]] = []
 
+        notify(65, "字段抽取完成，正在校验与修复证据")
         if llm_stats.available and client is not None:
             max_rounds = int(llm_settings.get("max_repair_rounds", 2))
             for round_no in range(1, max_rounds + 1):
@@ -253,12 +274,17 @@ class Extractor:
         review_stats = ReviewStats()
         review_items: list[dict[str, Any]] = []
         review_settings = self.settings.get("review") or {}
+        notify(75, "证据校验完成，正在处理独立复核")
         if review_settings.get("enabled"):
             review_stats.enabled = True
             merged, review_stats, review_items = self._run_review(
                 doc, merged, review_settings, review_stats
             )
 
+        timing["llm_ms"] = (time.perf_counter() - t0) * 1000
+
+        t0 = time.perf_counter()
+        notify(85, "独立复核结束，正在执行最终校验")
         field_values = self._build_field_values(merged, attempts, conflicts)
         validation, normalizations = apply_validation(
             field_values,
@@ -268,6 +294,7 @@ class Extractor:
             float(self.settings.get("extraction", {}).get("min_confidence", 0.6)),
             float(self.settings.get("extraction", {}).get("grounding_fuzzy_threshold", 0.86)),
         )
+        timing["validation_ms"] = (time.perf_counter() - t0) * 1000
         for key in conflicts:
             if key in field_values and field_values[key].value not in (None, ""):
                 field_values[key].warnings.append(
@@ -319,6 +346,7 @@ class Extractor:
             audit={
                 "document_type": doc_type.to_dict(),
                 "extraction_skipped": False,
+                "timing": timing,
                 "llm": llm_stats.to_dict(),
                 "review": review_stats.to_dict(),
                 "repair_rounds": repair_audit,
@@ -329,6 +357,7 @@ class Extractor:
             document_type=doc_type.to_dict(),
             compliance=compliance,
         )
+        notify(90, "字段处理完成，正在整理解析结果")
         return result
 
     # ------------------------------------------------------------------
@@ -346,31 +375,21 @@ class Extractor:
         stats: LLMStats,
         char_budget: int,
     ) -> dict[str, Candidate]:
-        candidates: dict[str, Candidate] = {}
-        errors = 0
-        for group in GROUP_ORDER:
-            fields = self._fields_for_group(group)
-            if not fields:
-                continue
-            context = select_context(doc, group, fields, char_budget)
-            if not context:
-                continue
-            if group == "scoring" and not any(
-                ("评分" in block.text or "评审" in block.text or "分值" in block.text)
-                for block in doc.blocks
-            ):
-                continue
-            try:
-                group_candidates, _ = extract_group(client, doc, group, fields, char_budget)
-                candidates.update(group_candidates)
-                stats.groups[group] = len(group_candidates)
-            except LLMError as exc:
-                errors += 1
-                stats.error = str(exc)
-                stats.groups[group] = -1
-                if errors >= 2:
-                    break
-        return candidates
+        # 真正全量：把全部字段合并成单次串行 LLM 调用，覆盖原 rules-only 的
+        # party/award/inquiry 分组；相比原先逐组 3 次调用，少 2 次 prefill 与往返。
+        all_fields = list(self.field_defs.values())
+        if not all_fields:
+            return {}
+        # 合并调用需覆盖全部章节，上下文预算放宽（仍是单次，总 token 低于原 3×预算）。
+        combined_budget = max(char_budget, 6000)
+        try:
+            group_candidates, _ = extract_group(client, doc, None, all_fields, combined_budget)
+            stats.groups["all"] = len(group_candidates)
+            return dict(group_candidates)
+        except LLMError as exc:
+            stats.error = str(exc)
+            stats.groups["all"] = -1
+            return {}
 
     def _run_review(
         self,

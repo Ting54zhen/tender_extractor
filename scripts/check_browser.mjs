@@ -11,18 +11,19 @@
 //   TENDER_SAMPLE    指定一份 .docx 需求报告（否则在 data/ 与 samples/ 里找）
 //   TENDER_CHROME    指定浏览器 exe（默认依次找 Chrome / Edge）
 //   TENDER_BROWSER_PORT / TENDER_CDP_PORT  端口（默认 8899 / 9333）
-// 前提：先跑 scripts/build_exe.py 生成 dist/招标需求解析.exe。
+// 默认验证打包产物；TENDER_CHECK_URL 可指向隔离的源码服务，复用同一交互检查。
+// 源码模式不启动/终止外部服务，结束时只清理自己创建的浏览器目录。
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXE_SRC = path.join(ROOT, 'dist', '招标需求解析.exe');
+const CHECK_URL = process.env.TENDER_CHECK_URL || '';
 const PORT = Number(process.env.TENDER_BROWSER_PORT || 8899);
 const CDP_PORT = Number(process.env.TENDER_CDP_PORT || 9333);
-const BASE = `http://127.0.0.1:${PORT}`;
+const BASE = CHECK_URL || `http://127.0.0.1:${PORT}`;
 const OUT = path.join(ROOT, 'data', 'browser-check');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -54,7 +55,7 @@ function killTree(proc) {
   if (!proc || !proc.pid) return;
   if (process.platform === 'win32') {
     // onefile 会拉起子进程，只杀引导器会留下占端口的孤儿进程
-    try { execFileSync('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { stdio: 'ignore' }); } catch { /* 已退出 */ }
+    try { execFileSync('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { stdio: 'ignore', windowsHide: true }); } catch { /* 已退出 */ }
   } else {
     try { proc.kill('SIGKILL'); } catch { /* 已退出 */ }
   }
@@ -80,15 +81,15 @@ function findSample() {
 }
 
 function main() {
-  if (!fs.existsSync(EXE_SRC)) throw new Error('缺少 dist exe，请先跑 scripts/build_exe.py');
+  if (!CHECK_URL && !fs.existsSync(EXE_SRC)) throw new Error('缺少 dist exe，请先跑 scripts/build_exe.py');
   if (!CHROME) throw new Error('找不到 Chrome/Edge，请设置 TENDER_CHROME 指向浏览器 exe');
   const sample = findSample();
   if (!sample) throw new Error('找不到 .docx 需求报告样本，请设置 TENDER_SAMPLE');
 
   fs.mkdirSync(OUT, { recursive: true });
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tender-cdp-'));
+  const tmp = fs.mkdtempSync(path.join(OUT, 'tender-cdp-'));
   const exe = path.join(tmp, '招标需求解析.exe');
-  fs.copyFileSync(EXE_SRC, exe);
+  if (!CHECK_URL) fs.copyFileSync(EXE_SRC, exe);
   const profile = path.join(tmp, 'chrome-profile');
 
   let web = null;
@@ -118,12 +119,12 @@ function main() {
   };
 
   const run = async () => {
-    web = spawn(exe, ['--no-browser', `--port=${PORT}`], { cwd: tmp, stdio: 'ignore' });
+    if (!CHECK_URL) web = spawn(exe, ['--no-browser', `--port=${PORT}`], { cwd: tmp, stdio: 'ignore', windowsHide: true });
     await waitFor(async () => {
       const r = await fetch(`${BASE}/api/health`);
       return r.ok ? true : null;
     }, 60000, 'exe 服务就绪');
-    add('exe 在空目录独立启动', true, `${BASE}/api/health 200`);
+    add(CHECK_URL ? '真实 Python 服务联通' : 'exe 在空目录独立启动', true, `${BASE}/api/health 200`);
 
     const buf = fs.readFileSync(sample);
     const created = await fetch(
@@ -144,7 +145,7 @@ function main() {
       '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
       '--remote-allow-origins=*', `--remote-debugging-port=${CDP_PORT}`,
       `--user-data-dir=${profile}`, '--window-size=1440,900', 'about:blank',
-    ], { stdio: 'ignore' });
+    ], { stdio: 'ignore', windowsHide: true });
     const target = await waitFor(async () => {
       const r = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`);
       const list = await r.json();
@@ -199,12 +200,15 @@ function main() {
       cards?.count >= 3 && /货物类/.test(cards.text) && /竞争性磋商/.test(cards.text),
       `${cards?.count} 张卡片`);
     await shot('01-模板库列表.png');
-    const detail = await ev(`(function(){
+    await ev(`(function(){
       var b=document.querySelector('[data-act="detail"]'); if(!b) return null;
       b.click();
-      var d=document.querySelector('dialog[open]');
-      return d ? {open:true, text:d.innerText.slice(0,160)} : {open:false};
     })()`);
+    // Vue 在事件结束后更新 DOM；等到实际占位符出现，避免只检查空弹窗。
+    const detail = await waitDom(`(function(){
+      var d=document.querySelector('#dlgDetail[open]');
+      return d && d.querySelectorAll('.ph-list .row').length ? {open:true, text:d.innerText.slice(0,160)} : null;
+    })()`, '模板占位符详情渲染');
     add('模板占位符详情弹窗可打开', !!detail?.open, JSON.stringify(detail));
 
     await go(`/fill?job=${job.id}`, 1200);
@@ -275,7 +279,7 @@ function main() {
       `document.getElementById('paper').innerText.indexOf('CDP预览同步标记')>=0`,
       '改字段后预览同步', 10000
     );
-    add('改字段后预览同步（800ms debounce）', !!synced,
+    add('改字段后预览同步（800ms debounce；不等同总耗时目标）', !!synced,
       `实测 ${Date.now() - syncStart}ms，占位符 ${edited}`);
 
     // 只点确实有对应字段的片段，避免点到「未绑定占位符」时按设计只弹 toast
@@ -313,10 +317,13 @@ function main() {
     })()`);
     add('自定义字段弹窗可打开', !!dlg);
     await shot('03-自定义字段弹窗.png');
-    // fill.html 的变量包在 IIFE 里，只能从 URL 与 localStorage 侧验证
+    // 从用户可见结果和持久化侧验证，不读取 Vue 内部组件状态。
     const saved = await ev(`(function(){
       document.getElementById('cfLabel').value='浏览器回归字段';
       document.getElementById('cfValue').value='BR-TEST-001';
+      // 模拟真实输入事件，让 v-model 接收新值；直接赋 .value 不会触发输入。
+      document.getElementById('cfLabel').dispatchEvent(new Event('input',{bubbles:true}));
+      document.getElementById('cfValue').dispatchEvent(new Event('input',{bubbles:true}));
       document.getElementById('cfSave').click();
       var jid=new URLSearchParams(location.search).get('job');
       return {stored: localStorage.getItem('tender.customFields.'+jid),
@@ -340,6 +347,109 @@ function main() {
     add('刷新后自定义字段持久化', persisted?.hit === true, JSON.stringify(persisted));
     add('不同任务之间不串数据', persisted?.other === null, `other=${persisted?.other}`);
 
+    // 读秒基准：切页再回来应从服务端 elapsed 继续，而不是从 0 重来。
+    // 用 CDP 注入 fetch 桩模拟一个已运行 42 秒的进行中任务，避免依赖真实任务耗时。
+    const mockSource = `(function(){
+      var orig = window.fetch;
+      window.fetch = function(url) {
+        if (typeof url === 'string' &&
+            (url === '/api/jobs' || url === '/api/jobs/mock-running')) {
+          var running = { id: 'mock-running', kind: 'extract', status: 'running',
+                          stage: '解析文档并抽取字段', use_llm: false, elapsed: 42.0 };
+          var body = url === '/api/jobs' ? { jobs: [running] } : running;
+          return Promise.resolve({ ok: true, status: 200,
+            json: function(){ return Promise.resolve(body); } });
+        }
+        return orig.apply(this, arguments);
+      };
+    })();`;
+    const injected = await send('Page.addScriptToEvaluateOnNewDocument', { source: mockSource });
+    await go('/', 1500);
+    await waitDom(`document.getElementById('status')?.classList.contains('show')`, '恢复状态卡片显示');
+    const first = await ev(`document.getElementById('status-elapsed')?.textContent`);
+    await go('/templates', 1000);
+    await go('/', 1500);
+    await waitDom(`document.getElementById('status')?.classList.contains('show')`, '再次返回状态卡片显示');
+    const back = await ev(`document.getElementById('status-elapsed')?.textContent`);
+    const firstSecs = parseFloat(first || '0');
+    const backSecs = parseFloat(back || '0');
+    add('切页返回后读秒从服务端耗时继续（不归零）',
+        firstSecs >= 42 && firstSecs < 45 && backSecs >= 42 && backSecs < 45,
+        `first=${first} back=${back}`);
+    await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: injected.identifier });
+
+    // 填写工作台：切到别的页面再回来，已填的值不能归零
+    await go(`/fill?job=${job.id}`, 1400);
+    await waitDom(`document.querySelectorAll('.field[data-key]:not([data-na]) [data-input]').length > 0`,
+      '填写页可编辑字段就绪');
+    const draft = await ev(`(function(){
+      var el=[].slice.call(document.querySelectorAll('.field[data-key]:not([data-na]) [data-input]'))[0];
+      if(!el) return null;
+      var f=el.closest('.field');
+      el.value='CDP切页保留标记';
+      el.dispatchEvent(new Event('input',{bubbles:true}));
+      return {key: f.getAttribute('data-key') || '', tpl: f.getAttribute('data-template') || ''};
+    })()`);
+    await go('/templates', 800);
+    await go(`/fill?job=${job.id}`, 1400);
+    await waitDom(`document.querySelectorAll('.field[data-key]:not([data-na]) [data-input]').length > 0`,
+      '返回填写页字段就绪');
+    const backValue = await ev(`(function(){
+      var key=${JSON.stringify(draft?.key || '')};
+      var f=document.querySelector('.field[data-key="'+CSS.escape(key)+'"]');
+      var el=f && f.querySelector('[data-input]');
+      return el ? el.value : null;
+    })()`);
+    add('切页返回后填写值不归零', !!draft && backValue === 'CDP切页保留标记',
+        `key=${draft?.key} before=CDP切页保留标记 after=${backValue}`);
+
+    // L2 预览同屏：整页 A4 按栏宽缩放后不应再被横向裁切
+    await ev(`(function(){ var p=document.getElementById('previewPane');
+      if(p && p.hidden) document.getElementById('btnPreview').click(); return true; })()`);
+    await waitDom(`document.querySelectorAll('#paper .pv-table').length > 0`, '缩放后预览纸面渲染');
+    const fit = await ev(`(function(){
+      var scroll=document.getElementById('pvScroll'), paper=document.getElementById('paper'),
+          box=document.getElementById('paperFit');
+      if(!scroll||!paper||!box) return null;
+      var pr=paper.getBoundingClientRect(), sr=scroll.getBoundingClientRect();
+      return {paperW: Math.round(pr.width), scrollW: scroll.clientWidth,
+              fitW: Math.round(box.getBoundingClientRect().width),
+              overflow: Math.round(pr.right - sr.right),
+              transform: getComputedStyle(paper).transform};
+    })()`);
+    add('生成前预览整页在栏内完整可见',
+        fit && fit.paperW <= fit.scrollW + 2 && fit.overflow <= 2, JSON.stringify(fit));
+
+    // 预览面板开合状态按任务记住
+    await go('/templates', 800);
+    await go(`/fill?job=${job.id}`, 1400);
+    await waitDom(`!document.getElementById('previewPane').hidden`, '返回填写页预览恢复');
+    const pvState = await ev(`(function(){
+      var p=document.getElementById('previewPane');
+      return {open: p ? !p.hidden : null,
+              stored: localStorage.getItem('tender.previewOpen.${job.id}')};
+    })()`);
+    add('切页返回后预览面板保持打开', pvState?.open === true, JSON.stringify(pvState));
+
+    // AI 起草建议：样本里没有抽取值为空的字段，建议条按设计不会渲染，
+    // 因此这里验证跨页暂存本身（写入 → 切页 → 内容仍在且未被清掉）。
+    const suggKey = `tender.suggestions.${job.id}`;
+    await ev(`localStorage.setItem(${JSON.stringify(suggKey)}, JSON.stringify({
+      project_name: {value:'CDP建议保留标记', reason:'浏览器回归', source:'llm_suggest'}
+    }))`);
+    await go('/templates', 700);
+    await go(`/fill?job=${job.id}`, 1400);
+    await waitDom(`document.getElementById('loading').classList.contains('hidden')`, '建议暂存页就绪');
+    const suggKept = await ev(`(function(){
+      try {
+        var raw = JSON.parse(localStorage.getItem(${JSON.stringify(suggKey)}) || '{}');
+        return !!(raw.project_name && raw.project_name.value === 'CDP建议保留标记');
+      } catch(e) { return false; }
+    })()`);
+    add('切页返回后 AI 起草建议暂存保留', suggKept === true,
+        `key=${suggKey} kept=${suggKept}`);
+
+    // 放到最后统计，覆盖上面所有导航（含注入 fetch 桩与切页往返）
     const external = [...new Set(events
       .filter((e) => e.method === 'Network.requestWillBeSent')
       .map((e) => e.params.request.url)
@@ -361,18 +471,26 @@ function main() {
 
   return run()
     .catch((err) => { add('执行异常', false, err.stack || String(err)); })
-    .finally(() => {
+    .finally(async () => {
       try { ws?.close(); } catch { /* noop */ }
       killTree(chrome);
       killTree(web);
-      try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* noop */ }
+      // Windows 的浏览器子进程可能稍后才释放配置目录，先等退出再清理。
+      if (chrome?.exitCode === null) await Promise.race([
+        new Promise(resolve => chrome.once('exit', resolve)), sleep(3000),
+      ]);
+      // 只允许清理本次创建、位于回归输出目录内的工作目录。
+      if (path.dirname(tmp) === path.resolve(OUT) && path.basename(tmp).startsWith('tender-cdp-')) {
+        try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); }
+        catch (error) { console.error(`[browser] 临时目录清理失败：${tmp} ${error.message}`); process.exitCode = 1; }
+      }
       const failed = results.filter((r) => !r.pass);
       for (const r of results) {
         console.log(`[browser] ${r.pass ? 'OK  ' : 'FAIL'} ${r.name}${r.detail ? ' :: ' + r.detail.slice(0, 180) : ''}`);
       }
       console.log(`[browser] 检查项：${results.length - failed.length}/${results.length} 通过`);
       console.log(`[browser] 截图目录：${OUT}`);
-      process.exitCode = failed.length ? 1 : 0;
+      if (failed.length) process.exitCode = 1;
     });
 }
 

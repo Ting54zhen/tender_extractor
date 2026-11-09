@@ -46,3 +46,11 @@ data/
 # 临时文件
 *.tmp
 *.log
+
+# npm 本地依赖与开发缓存；package-lock.json 必须提交以固定依赖树。
+node_modules/
+.vite/
+
+# 前端构建产物随仓库与 exe 本地分发，单独放行（上面 dist/ 会连带忽略前端产物）。
+!frontend/dist/
+!frontend/dist/**

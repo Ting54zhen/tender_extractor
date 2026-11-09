@@ -77,19 +77,26 @@ class Document:
     metadata: dict[str, Any] = field(default_factory=dict)
     cleaning: dict[str, Any] = field(default_factory=dict)
     outline: list[dict[str, Any]] = field(default_factory=list)
+    # 解析后文档不可变，下列惰性缓存用于加速校验回链与表画像（串行安全）。
+    _tables_cache: list[Block] | None = field(default=None, init=False, repr=False)
+    _block_index: dict[str, Block] | None = field(default=None, init=False, repr=False)
+    _full_text_cache: str | None = field(default=None, init=False, repr=False)
 
     @property
     def tables(self) -> list[Block]:
-        return [b for b in self.blocks if b.is_table]
+        if self._tables_cache is None:
+            self._tables_cache = [b for b in self.blocks if b.is_table]
+        return self._tables_cache
 
     def block_by_id(self, block_id: str) -> Block | None:
-        for block in self.blocks:
-            if block.id == block_id:
-                return block
-        return None
+        if self._block_index is None:
+            self._block_index = {b.id: b for b in self.blocks}
+        return self._block_index.get(block_id)
 
     def full_text(self) -> str:
-        return "\n".join(b.text for b in self.blocks if b.text)
+        if self._full_text_cache is None:
+            self._full_text_cache = "\n".join(b.text for b in self.blocks if b.text)
+        return self._full_text_cache
 
 
 @dataclass

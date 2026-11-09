@@ -286,15 +286,23 @@ def _set_paragraph_text(p, text: str) -> None:
         p.remove(extra)
 
 
-def _star_clauses_for(star_clauses: list[dict[str, Any]], item: dict[str, Any]) -> list[dict[str, Any]]:
-    """筛出属于某一项标的的 ★/▲ 条款（按 item_seq 或 item_name 匹配）。"""
+def _star_clauses_for(
+    clauses: list[dict[str, Any]], item: dict[str, Any], index: int = 0
+) -> list[dict[str, Any]]:
+    """按标的序号或表内分组名归附表；无分组的总体条款放第一张，不丢条款。"""
     seq = str(item.get("seq") or "")
     name = str(item.get("name") or "")
-    matched = [
-        c for c in star_clauses
-        if str(c.get("item_seq") or "") == seq
-        or (name and str(c.get("item_name") or "") == name)
-    ]
+    matched: list[dict[str, Any]] = []
+    for clause in clauses:
+        clause_seq = str(clause.get("item_seq") or "").strip()
+        group = str(clause.get("item_name") or "").strip()
+        hit = bool(clause_seq and seq and clause_seq == seq)
+        if not hit and group and name:
+            hit = group in name or name in group
+        if not hit and not group and not clause_seq and index == 0:
+            hit = True
+        if hit:
+            matched.append(clause)
     return matched
 
 
@@ -417,6 +425,8 @@ def _fill_document_tables(document, result: ExtractionResult) -> None:
     business = structured.get("business_requirements") or {}
     items = structured.get("procurement_items") or []
     star_clauses = structured.get("star_clauses") or []
+    # 附表写全部技术参数（含一般参数）；★▲ 只是其中带标记的子集。
+    tech_clauses = structured.get("tech_clauses") or star_clauses
     industry = _field_text(result, "industry")
 
     for table in document.tables:
@@ -430,22 +440,32 @@ def _fill_document_tables(document, result: ExtractionResult) -> None:
         elif any("分项预算单价" in h for h in head):
             _fill_item_detail_table(table, items, industry)
         elif head and "参数性质" in head[0]:
-            _fill_tech_tables(document, table, items, star_clauses)
+            _fill_tech_tables(document, table, items, tech_clauses)
 
 
 def _fill_tech_tables(
     document,
     tech_table,
     items: list[dict[str, Any]],
-    star_clauses: list[dict[str, Any]],
+    clauses: list[dict[str, Any]],
 ) -> None:
-    """为每项标的生成一张技术参数附表：复制标题段落与参数表，逐项填充。"""
+    """按标的拆技术参数附表；标的清单缺失时保留一张总附表，不丢条款。
+
+    旧实现以 items 为唯一入口，标的解析失败会连带放弃整张条款表；而条款表
+    现在可以独立于标的识别，所以这里也要允许「只有条款、没有标的」。
+    """
     title_p = None
     for p in document.paragraphs:
         if (p.text or "").strip().startswith("附表"):
             title_p = p
             break
-    if title_p is None or not items:
+    if title_p is None:
+        return
+    if not items:
+        if not clauses:
+            return
+        _set_paragraph_text(title_p._p, "附表一：技术参数要求")
+        _fill_tech_table(tech_table, clauses, "")
         return
 
     from docx.table import Table
@@ -453,16 +473,16 @@ def _fill_tech_tables(
     prev_tbl = tech_table._tbl
     for idx, item in enumerate(items):
         name = str(item.get("name") or "")
-        clauses = _star_clauses_for(star_clauses, item)
+        part = _star_clauses_for(clauses, item, idx)
         label = f"附表{_CN_NUM[idx] if idx < len(_CN_NUM) else idx + 1}：{name}"
         if idx == 0:
             _set_paragraph_text(title_p._p, label)
-            _fill_tech_table(tech_table, clauses, str(item.get("requirement") or ""))
+            _fill_tech_table(tech_table, part, str(item.get("requirement") or ""))
         else:
             new_p = copy.deepcopy(title_p._p)
             new_tbl = copy.deepcopy(tech_table._tbl)
             _set_paragraph_text(new_p, label)
-            _fill_tech_table(Table(new_tbl, document), clauses, str(item.get("requirement") or ""))
+            _fill_tech_table(Table(new_tbl, document), part, str(item.get("requirement") or ""))
             prev_tbl.addnext(new_p)
             new_p.addnext(new_tbl)
             prev_tbl = new_tbl

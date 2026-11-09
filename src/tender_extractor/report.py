@@ -39,6 +39,13 @@ PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 
 CONFIRM_STATUSES = {"inferred", "low_confidence", "invalid", "conflict"}
 
+TABLE_KIND_CN = {
+    "kv": "键值表",
+    "items": "标的清单",
+    "clauses": "技术条款表",
+    "unknown": "未识别",
+}
+
 
 def _clip(text: str, limit: int) -> str:
     """超长截断，省略号计入 limit。"""
@@ -651,6 +658,45 @@ def render_markdown(result: ExtractionResult) -> str:
         lines.append("")
         lines.append(_plain(summary_text))
         lines.append("")
+
+    profiles = structured.get("table_profiles") or []
+    if profiles:
+        lines.append(_sub("表格识别结果"))
+        lines.append("")
+        lines.extend(
+            _table(
+                ["证据块", "章节", "判定表型", "置信度", "列角色", "未映射列名"],
+                [
+                    (
+                        _cell(item.get("block_id"), 12),
+                        _cell(item.get("section"), 28),
+                        _cell(
+                            TABLE_KIND_CN.get(str(item.get("kind")), item.get("kind")),
+                            12,
+                        ),
+                        _cell(item.get("confidence"), 8),
+                        _cell(
+                            "、".join(
+                                f"{col.get('index')}:{col.get('role')}"
+                                for col in item.get("columns") or []
+                            ),
+                            60,
+                        ),
+                        _cell("、".join(item.get("unmapped_headers") or []), 40),
+                    )
+                    for item in profiles
+                ],
+            )
+        )
+        lines.append("")
+        unmapped = structured.get("unmapped_tables") or []
+        if unmapped:
+            blocks = "、".join(str(item.get("block_id") or "") for item in unmapped)
+            lines.append(
+                f"> 有 {len(unmapped)} 张表未自动判型（{blocks}），"
+                "原文内容未进入结构化结果，请人工确认后补录。"
+            )
+            lines.append("")
 
     outline = structured.get("outline") or []
     if outline:

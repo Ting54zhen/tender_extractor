@@ -56,6 +56,9 @@ GROUP_SECTIONS = {
     "contract": ["付款", "款项支付", "交付", "采购标的", "合同", "售后", "资格"],
 }
 
+# 合并抽取时使用的全部章节（所有分组的并集），让单次调用覆盖全文档相关片段。
+ALL_GROUP_SECTIONS = sorted({s for secs in GROUP_SECTIONS.values() for s in secs})
+
 GROUP_TITLES = {
     "basic": "项目基本信息",
     "commercial": "商务与政策",
@@ -141,11 +144,13 @@ def _field_prompt_lines(fields: Iterable[dict[str, Any]]) -> str:
 
 def select_context(
     doc: Document,
-    group: str,
+    group: str | None,
     fields: list[dict[str, Any]],
     char_budget: int = 7000,
+    sections: list[str] | None = None,
 ) -> list[Block]:
-    sections = GROUP_SECTIONS.get(group, [])
+    if sections is None:
+        sections = GROUP_SECTIONS.get(group, [])
     aliases: list[str] = []
     for field in fields:
         aliases.extend(field.get("aliases") or [])
@@ -182,13 +187,20 @@ def select_context(
 
 def build_messages(
     doc: Document,
-    group: str,
+    group: str | None,
     fields: list[dict[str, Any]],
     char_budget: int,
 ) -> tuple[str, str]:
-    blocks = select_context(doc, group, fields, char_budget)
+    if group:
+        sections = GROUP_SECTIONS.get(group, [])
+        title = GROUP_TITLES.get(group, group)
+    else:
+        # 合并抽取：覆盖全部章节与全部字段，真正全量 LLM 重抽（含原 rules-only 分组）。
+        sections = ALL_GROUP_SECTIONS
+        title = "全部字段"
+    blocks = select_context(doc, group, fields, char_budget, sections=sections)
     context = "\n\n".join(_render_block(block) for block in blocks)
-    user = f"""请从下面的招标需求报告中抽取“{GROUP_TITLES.get(group, group)}”字段。
+    user = f"""请从下面的招标需求报告中抽取“{title}”字段。
 
 字段定义：
 {_field_prompt_lines(fields)}
@@ -199,6 +211,9 @@ def build_messages(
 输出格式（只输出这个 JSON）：
 {{"fields":[{{"key":"字段key","value":"原文值","evidence":"原文连续片段"}}]}}
 如果某个字段在原文中不存在，value 填空字符串，不要猜。"""
+    if not group:
+        # 合并调用输出较长，要求模型只回有值的字段，省生成 token。
+        user += "\n为节省输出，原文中不存在的字段请不要输出条目（不要返回空值）。"
     return SYSTEM_PROMPT, user
 
 

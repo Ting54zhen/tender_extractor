@@ -1,0 +1,33 @@
+/* 对话式入口的会话流样式：沿用 beige / ink 设计令牌，不重设计视觉。
+   卡片内部复用全局 .btn / .tag / .bar 类，这里只定义气泡与布局。 */
+
+.chat-stream { display: flex; flex-direction: column; gap: 12px; margin-top: 22px; text-align: left; }
+.chat-msg { display: flex; flex-direction: column; align-items: flex-start; }
+.chat-msg.user { align-items: flex-end; }
+.chat-bubble { max-width: min(640px, 86%); padding: 9px 14px; border-radius: 14px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.chat-msg.assistant .chat-bubble { background: var(--paper, #fff); border: 1px solid var(--line); }
+.chat-msg.user .chat-bubble { background: var(--ink); color: #fff; }
+
+.chat-card { max-width: min(680px, 92%); margin-top: 2px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper, #fff); display: flex; flex-direction: column; gap: 10px; }
+.chat-card-head { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.chat-card-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-card-head .hintline { margin-left: auto; white-space: nowrap; }
+.chat-stats { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+.chat-stats b { color: var(--ink); }
+.chat-ops { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.chat-review-item { padding: 8px 0; border-top: 1px solid var(--line-soft); }
+.chat-review-item:first-of-type { border-top: 0; padding-top: 0; }
+.chat-review-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.chat-review-issue { margin-top: 4px; font-size: 13px; color: var(--muted); }
+
+.chat-job-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line-soft); }
+.chat-job-row:first-of-type { border-top: 0; padding-top: 0; }
+.chat-job-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.chat-job-info b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-job-row .chat-ops { flex-wrap: nowrap; }
+
+/* 判定来源徽标：把「规则 / 模型兜底 / 兜底」显式展示给用户，便于核对分流。 */
+.chat-via { margin-bottom: 4px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 11px; color: var(--muted); background: var(--line-soft); }
+.chat-evidence { padding-top: 8px; border-top: 1px solid var(--line-soft); font-size: 12px; line-height: 1.5; color: var(--muted); }
+.chat-typing { font-size: 13px; color: var(--muted); }
