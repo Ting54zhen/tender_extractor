@@ -8,7 +8,11 @@ import { statusOf } from '../../utils/field_status.js';
 
 /** FillPage 的状态与业务动作；页面模板独立维护，不通过 DOM 反向收集字段值。 */
 export function usePage() {
-  const jobId = new URLSearchParams(location.search).get("job") || "";
+  const queryJob = new URLSearchParams(location.search).get("job") || "";
+  // 侧栏「填写工作台」链接是 /fill、不带任务号；记住最近一次填写的任务，
+  // 让这种入口也能对上按 jobId 隔离的暂存键，而不是直接报「缺少任务参数」。
+  const activeJobKey = "tender.activeFillJob";
+  const jobId = queryJob || String(readLocal(activeJobKey, "") || "");
   const jobInfo = ref(null), baseGroups = ref([]), templates = ref([]), templateId = ref("");
   const customFields = ref([]), edits = reactive({}), suggestions = ref({}), activeGroup = ref(""), filter = ref("all");
   const loading = ref(true), scopeLoading = ref(false), generating = ref(false), suggesting = ref(false);
@@ -228,12 +232,15 @@ export function usePage() {
     catch (err) { notify("生成失败：" + err.message, "error"); } finally { generating.value = false; }
   }
   async function load() {
+    // 无任务号入口先回到最近一次填写的任务，保证 URL 与本地暂存键一致。
+    if (!queryJob && jobId) { location.replace("/fill?job=" + encodeURIComponent(jobId)); return; }
     // 必须在第一个 await 之前同步恢复：后续赋值触发的 payload watch 会持久化 edits，
     // 放到异步流程末尾会被空 edits 覆盖掉上一次会话的暂存。
     restoreEdits(); restoreSuggestions();
     previewOpen.value = readLocal(storeKey("previewOpen"), false) === true;
     try {
       if (!jobId) throw new Error("缺少任务参数。请从需求详情页进入填写工作台。");
+      writeLocal(activeJobKey, jobId);
       jobInfo.value = await api("/api/jobs/" + encodeURIComponent(jobId));
       if (jobInfo.value.status !== "done") throw new Error("该任务尚未完成或不可填写，请返回解析页查看状态。");
       templates.value = (await api("/api/templates")).templates || [];

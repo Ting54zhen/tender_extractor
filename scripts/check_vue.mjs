@@ -226,6 +226,14 @@ async function main() {
     await waitDom(`parseFloat(document.getElementById('status-elapsed')?.textContent || '0') >= 42`);
     extractionState = 'done'; jobElapsed = 1.2;
   });
+  await run('侧栏往返后填写值仍保留', async () => {
+    await go('/fill?job=job-one'); await waitDom(`document.querySelectorAll('.field[data-key]').length === 2`);
+    await input('[data-key="project_name"] [data-input]', '侧栏往返标记');
+    await waitDom(`(localStorage.getItem('tender.edits.job-one') || '').includes('侧栏往返标记')`);
+    await go('/templates'); await go('/fill');
+    await waitDom(`document.querySelectorAll('.field[data-key]').length === 2`);
+    assert.equal(await evaluate(`document.querySelector('[data-key="project_name"] [data-input]').value`), '侧栏往返标记');
+  });
   await go('/templates'); await waitDom(`document.querySelector('.tpl-card')`);
   await run('模板上传、设默认、重命名、预览和删除回退', async () => {
     await evaluate(`(() => { const file = new File(['fixture'], '脱敏模板.docx'); const dt = new DataTransfer(); dt.items.add(file); const input = document.getElementById('fileInput'); input.files = dt.files; input.dispatchEvent(new Event('change', {bubbles:true})); })()`);
