@@ -1,0 +1,10 @@
+/* 挂载前隐藏占位根节点，避免短暂闪出未初始化内容。 */
+[v-cloak] {
+    display: none !important;
+}
+
+/* 删除入口为淡红色，确认操作使用实心红色；独立类避免改变已有 danger 按钮。 */
+.btn.delete-soft { color: var(--red); background: var(--red-soft); border-color: var(--red); }
+.btn.delete-soft:hover { background: #f8e3df; border-color: var(--red); }
+.btn.delete-solid { color: #fff; background: var(--red); border-color: var(--red); }
+.btn.delete-solid:hover { color: #fff; background: #972e23; border-color: #972e23; }

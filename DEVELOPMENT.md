@@ -13,13 +13,13 @@
 | 运行时依赖 | `python-docx`、`docxtpl`（PDF 需可选安装 `pdfplumber`） |
 | 模型接入 | 本地 Ollama（默认）或任意 OpenAI 兼容接口 |
 | Web 服务 | Python 标准库 `http.server`，**不引入 Web 框架** |
-| 前端 | 纯 HTML/CSS/JS，**无 CDN、无构建工具、无外部依赖** |
-| 测试 | pytest（共 16 个测试文件 / 111 项，当前全绿） |
+| 前端 | Vue 3.5.45 + npm + Vite 8.3.6（MIT），SFC 多页面，沿用 CSS，**生产无 CDN** |
+| 测试 | pytest（当前验证结果见第十一节） |
 
 **三条硬约束（改动前必须知道）：**
 
 1. **本地闭环优先**：文档默认不出本机，Web 默认只监听 `127.0.0.1`；
-2. **零第三方 Web 依赖**：不引入 Flask/FastAPI/前端框架，保证内网部署与商用合规；
+2. **Web 资源本机分发**：后端不用 Flask/FastAPI，前端使用已授权的 Vue + npm + Vite，保留 MIT 许可；不使用 CDN、Vue Router、Pinia 或大型组件库；
 3. **证据可回链**：任何模型产出的值都必须能回到原文片段，禁止无证据字段。
 
 ---
@@ -151,29 +151,23 @@
 
 ## 四、前端模块（`frontend/`）
 
-| 文件 | 页面 | 职责 |
-|------|------|------|
-| `shell.js` | 全站 | 注入左侧导航外壳（品牌、主操作、入口、本机状态） |
-| `app.css` | 全站 | 设计系统：色板、排版、按钮、表格、表单、卡片与响应式规则 |
-| `index.html` | 需求解析 `/` | 上传采购需求报告 → 展示结构化字段、证据、复核清单、模板映射、审核报告 |
-| `fill.html` | 填写工作台 `/fill` | 逐字段核对/编辑，历史值复用、AI 建议采纳、标的清单导入、生成招标文件 |
-| `compare.html` | 文档比对 `/compare` | L2 双文档比对：招标文件 + 投标文件 → 符合性比对结果 |
-| `projects.html` · `projects.js` · `projects.css` | 项目工作台 `/projects` | 按采购项目归档任务、查看历史结果、归档/恢复、项目级 zip 导出 |
-| `company.html` · `company.js` | 企业档案 `/company` | 维护资质、业绩、人员与证明材料索引 |
-| `settings.html` · `settings.js` | 设置 `/settings` | 模型接入、第三方复核、抽取阈值与输出目录的可视化覆盖 |
-| `README.md` | — | 前端协作说明、页面骨架与 API 契约表 |
+| 目录/文件 | 职责 |
+|------|------|
+| `*.html` | 七个 HTML 入口，仅元数据、挂载点和模块脚本 |
+| `src/pages/<page>/` | 页面 SFC、独立业务 composable 与 main.js |
+| `src/components/` | 导航、字段卡片、自定义字段弹窗、模板选择、结构化预览与面板 |
+| `src/composables/` | 共享任务轮询与生命周期管理 |
+| `src/services/` · `src/utils/` · `src/config/` | 同源请求/下载、纯工具、声明式表单 |
+| `src/styles/` | 原有 CSS；页面样式在 pages/，不重新设计视觉 |
+| `public/assets/` | Vue MIT 许可与第三方声明，原样复制到产物 |
+| `package.json` · `package-lock.json` · `vite.config.js` | npm 精确依赖、锁文件、七入口与本机 API 代理 |
+| `dist/` | 仅生产 HTML/JS/CSS/许可，忽略，不手改、不提交 |
 
-**前端与后端的解耦方式：**
+源码开发先在 frontend 执行 `npm ci`，运行 `npm run dev` 使用 127.0.0.1:5173 热更新，并将 `/api/*` 代理到 Python 的 8765。生产或 Python 同源联调先 `npm run build`，再刷新 8765；Python 无需重启。Node/npm 仅开发机需要，不能在运行时从 CDN 或 npm 拉取资源。
 
-`web.py` 的静态目录解析顺序为：
+静态根：显式 `TENDER_FRONTEND_DIR`（指向构建目录）优先；源码默认 `frontend/dist/`，冻结 EXE 默认包内 `static/`。缺构建不回退到源码、不暴露 node_modules。打包脚本先 build/check，再仅收集 dist。
 
-```
-环境变量 TENDER_FRONTEND_DIR  →  项目根 frontend/  →  包内 static/（兜底）
-```
-
-页面路由与文件同名（`/` → `index.html`、`/fill` → `fill.html`、`/compare` → `compare.html`、`/projects` → `projects.html`、`/company` → `company.html`、`/settings` → `settings.html`），`/assets/*` 映射到本目录内的 css/js。
-
-因此前端成员**只改 `frontend/` 下的文件、刷新浏览器即生效**，不需要重启服务、不需要碰任何 Python 代码。
+页面路径与 `.html` 别名、查询参数及 `/api/*` 保持原约定；不引入 Router/Pinia/大型组件库。详细拆分规则、命令及目录见 `frontend/README.md`。
 
 **API 契约（改动需双方确认）：**
 
@@ -467,6 +461,10 @@ cd tender_extractor
 # 2. 一键准备环境（创建 .venv、安装依赖、检查模型服务）
 start.bat setup --dev
 
+# 仅源码网页开发需要 Node/npm；首次下载依赖，构建产物由 Python 本地分发。
+npm --prefix frontend ci
+npm --prefix frontend run build
+
 # 3. 确认本地模型（默认配置）
 ollama list        # 需要 qwen2.5:7b-instruct-q4_K_M 与 qwen2.5:1.5b-instruct
 ```
@@ -483,7 +481,9 @@ ollama list        # 需要 qwen2.5:7b-instruct-q4_K_M 与 qwen2.5:1.5b-instruct
 | 检查模型服务 | `start.bat health` |
 | 打开网页界面 | `start.bat web`（默认 `127.0.0.1:8765`） |
 | 跑测试 | `start.bat test` 或 `python -m pytest tests -q` |
-| 前端独立预览 | `set TENDER_FRONTEND_DIR=<自定义目录>` 后启动 web |
+| 前端热更新开发 | `npm --prefix frontend run dev`（5173，API 代理到 Python 8765） |
+| 前端生产构建/检查 | `npm --prefix frontend run build` / `npm --prefix frontend run check` |
+| 前端自定义构建目录 | `set TENDER_FRONTEND_DIR=<自定义 dist 目录>` 后启动 web |
 
 ### 9.3 输出位置
 
@@ -497,7 +497,7 @@ ollama list        # 需要 qwen2.5:7b-instruct-q4_K_M 与 qwen2.5:1.5b-instruct
 |------|-----------|
 | `Host key verification failed` / `Permission denied (publickey)` | Git 自带 MSYS2 ssh 不支持中文用户名路径。已全局修复：`git config --global core.sshCommand "C:/Windows/System32/OpenSSH/ssh.exe"` |
 | `UnicodeDecodeError: 'gbk' codec` 警告 | Windows 终端 GBK 解码测试子进程输出所致，不影响测试结果；可设 `PYTHONIOENCODING=utf-8` 减少噪音 |
-| Web 打开是旧页面 | 确认 `STATIC_DIR` 指向 `frontend/`（启动日志可见），或检查是否设置了 `TENDER_FRONTEND_DIR` |
+| Web 打开是旧页面 | 执行 npm run build，确认 `STATIC_DIR` 指向 `frontend/dist/`（启动日志可见），或检查是否设置了 `TENDER_FRONTEND_DIR` |
 | 模型抽取结果为空 | 先跑 `start.bat health` 确认 Ollama 与模型名；再确认 `settings.json` 的 `llm.model` |
 | 抽取被判定为「非招标文件」 | `doc_type` 前置拦截，属预期行为；调试可加 `--allow-non-tender` |
 
@@ -511,6 +511,9 @@ ollama list        # 需要 qwen2.5:7b-instruct-q4_K_M 与 qwen2.5:1.5b-instruct
 
 **已完成：**
 
+- 需求 / 项目界面统一与记录删除（11/7）：需求详情「返回需求列表」和项目详情「返回列表」统一黑底白字；需求搜索在状态工具栏下显示「搜索结果 共xx条」，固定反馈占位、状态按钮宽度和滚动条空间，修复状态激活加粗、长列表 / 空筛选结果导致的抖动。浏览器标题按需求解析 / 新建解析 / 需求详情对应视图，新建解析不再选中侧栏需求解析。详情新增红字 / 淡红底 / 红边框删除按钮，使用居中确认弹窗，失败留窗、成功返回列表；新增 `DELETE /api/jobs/{id}` 删除已结束的抽取记录、确认值与内存缓存，保留项目、其他任务和本机文件，排队 / 运行中返回 409，比对任务返回 400，契约同步 `frontend/README.md`。项目删除改为同款居中美化弹窗，原提示文案不变，按钮为红色「确认删除」与「取消」，项目空态跨满网格并居中。`npm run build` / `npm run check` 通过（7 入口、23 本地资源）；真实 Chrome 夹具回归 32/32 通过（新增 5 项，含三档状态布局坐标一致、搜索计数、两类删除确认 / 取消 / 失败与成功、项目空态 / 弹窗居中、标题与导航）；全量 `python -m pytest tests -q --tb=short`（匹配现有依赖的 Python 3.14 + `.venv/Lib/site-packages`）175 项通过，新增 4 项 API 用例，既有弃用警告保留。截图在已忽略的 `data/vue-browser-check/09-项目删除确认.png`、`10-项目空状态.png`、`11-需求搜索计数.png`；未重建 EXE。
+- 新建解析输入与上传体验修复（11/7）：文字框随内容自动增高 / 删减后收回，最低 72px、最高 250px，超出后框内滚动，关闭手动拉伸；窗口宽度变化时按换行重新计算高度。文件拖入输入区显示「松开即可上传需求报告」，提示层不占布局，跨子元素拖动保持稳定，离开 / 放下 / 取消清除。上传入口与文件卡片复用固定占位、长文件名省略、工具栏提示预留宽度，并为整页预留滚动条空间，修复上传 / 移除前后抖动。`npm run build` / `npm run check` 通过；`node scripts/check_vue.mjs` 27/27 通过（新增 3 项，覆盖自动高度与上限 / 缩回、拖入提示与跨子元素、1440 / 1100 / 800 三档上传与移除前后主元素坐标尺寸完全一致），截图落 `data/vue-browser-check/07-松开上传提示.png`、`08-上传后保持对齐.png`。本轮只改前端与浏览器回归，未改 Python 引擎，未重跑 Python 测试，未重建 EXE。
+- 需求解析工作流调整（11/7）：`/` 改为与项目工作台一致的需求卡片列表，支持状态筛选、搜索、刷新与查看详情；`/?view=new` 独立新建解析视图支持文字输入、报告拖放 / 选择、原提示词与项目 / 模式 / 强制抽取选择。文字转为 UTF-8 TXT 沿用原证据链，选择报告时明确只解析报告并保留文字草稿；任务创建后跳转 `/?job=<id>`，刷新可继续轮询。详情顶部保留真实阶段百分比条，完成后 100% 展示参考图的统计 / 下载 / 字段证据 / 待复核 / 模板映射 / 审核报告；失败保留阶段和错误，非采购文档明确显示跳过及重新选择入口。后端增加可选阶段回调与任务 `progress` 字段，前端契约已同步；没有增加依赖或改变模型证据核验。全量 Python 171 项通过（新增 4 项，含文字证据 / 阶段 / 跳过 / 失败 / 重启恢复），`npm run build` / `npm run check` 通过（7 入口、22 本地资源），真实 Chrome 夹具回归 24/24，通过文字提交跳转、拖放、100% / 失败态、详情刷新恢复及三档响应式；截图位于已忽略的 `data/vue-browser-check/`。全量首轮遭一次本机连接被系统中止，完整重跑全绿；未重建 EXE。
 - 模块化改造：前后端解耦、`data/` 隔离、标准模板入库；GitHub 同步与 SSH 环境修复。
 - 抽取引擎三道防线：规则层（不依赖模型）→ 模型补缺 + 证据核验 → 第三方复核；含跨字段勾稽、文档类型前置校验、校验失败回喂（≤2 轮）。
 - 招标文件生成器：字段占位符回填 + **结构化表格回填**（主要商务要求表、标的清单简表/详表、每标的一张技术参数附表，共 8 张附表）；编制规范默认值兜底；采购人地址回退推断。
@@ -564,3 +567,27 @@ ollama list        # 需要 qwen2.5:7b-instruct-q4_K_M 与 qwen2.5:1.5b-instruct
 16. **历史值 / AI 建议采纳后预览不刷新**（可选）：`fill.html` 的 `use-hist`、`use-sugg` 两个分支改完 `state` 只调 `updateProgress()`，没走 `schedulePreview()`；本次为修持久化补了 `saveState()`，预览仍要等下一次其他操作才更新。启动条件：确认预览 debounce 口径后给两处补 `schedulePreview()` 并加回归断言。
 17. **预览缩放可读性人工确认**（可选）：L2 在 1440px 下缩放比约 0.52，12pt 显示约 6pt；已提供栏内「100%」切换，但真实填写时是否够用需试用判断。启动条件：首轮试用记录用户是否频繁切 100%，再决定是否调整默认比例或增加中间档。
 18. **全量 LLM 计时与 <120s 验收 + 合并精度实测**：调用次数已从 3→1（合并为单次全量，且真正覆盖 53 字段），但 <120s 仍取决于本地模型（qwen2.5:7b q4）单请求延迟。启动条件：跑一次真实样本全量 `extract_document(use_llm=True)` 记录 `audit.timing.llm_ms`，同时核对合并大 prompt 下 7B 是否漏字段/精度下降（与改造前分组建模结果对比）；若仍超预算或精度下滑，需在「规则优先只补缺口字段（降低 LLM 调用次数）」与「并发独立组调用」之间二选一，二者此前均被否决，需重新确认范围。
+- Vue 多页面迁移：七个页面分别挂载 Vue，保留原 URL / `.html` 别名、查询参数与全部 `/api/*` 契约；公共导航、字段卡片、结构化预览改为组件，全部既有 CSS 保留。最初本地全局脚本方案已被下述 npm + Vite 单文件组件方案替代；不使用 CDN、Vue Router、Pinia 或大型组件库。
+- Vue 浏览器回归：`node scripts/check_vue.mjs` 19/19 通过（本机 HTTP 夹具 + 真实 Chrome，零 npm 包）；覆盖七页与别名、跨分组修改 / 清空、金额字符串、建议人工采纳、标的导入、预览合并表格 / 跨组定位 / 旧响应丢弃、自定义字段持久化 / 任务隔离、模板管理、设置 / 档案 / 项目、解析结果安全转义、上传 / 移除 / 轮询和比对 multipart 请求。补充用例发现并修复首页模板引用与 `file` 状态同名导致的上传状态冲突；19 项全绿且无外部资源请求 / 浏览器异常，截图落 `data/vue-browser-check/`（不入库）。
+- Vue 真实后端联调：`TENDER_CHECK_URL` 指向隔离源码服务、`TENDER_SAMPLE` 指定合成脱敏报告后，`node scripts/check_browser.mjs` 22/22 通过；纯规则解析、三套真实模板、预览 20 表 / 97 占位符片段、字段同步 / 定位、自定义字段与响应式布局均已复验。修正旧验收脚本以真实 input 事件驱动 Vue，并等 DOM 更新 / 浏览器退出；本次「改字段 → 预览可见」约 1.5s，800ms 仍仅为防抖间隔。
+- 本地资源与发布检查：前一阶段已增加真实标准库静态分发测试、Vue 本地资源与许可检查；npm 方案下改为验证散列构建资源、锁文件完整性和许可，替代旧 vendor 摘要及固定脚本列表。七页既有样式迁入 src/styles，打包与验收脚本同步采用 dist。
+- npm 工程化与职责拆分：Vue 3.5.45、Vite 8.3.6、官方插件 6.0.10 均固定版本（MIT），提交 package-lock；七个 HTML 仅作入口，src/pages 下拆 Page.vue / 页面业务 composable / main.js，components 下拆导航、字段编辑、自定义字段弹窗、模板选择弹窗、预览面板与安全 blocks 渲染；共享逻辑分别进入 composables/services/utils/config，样式移至 styles/pages 与公共 CSS。删除旧全局脚本和重复资源，保留中文注释；三个原有公共 CSS 逐内容比对一致。
+- npm 构建与分发验证：`npm ci --offline --ignore-scripts`、`npm run build`、`npm run check` 通过，7 个入口 / 21 个本地 JS/CSS 资源闭合、Vue 与 Vite 辅助代码许可证完整；Vite 开发模式实测 14 个页面路径（含别名）、7 个模块入口 / SFC 编译与本机 /api 代理通过。npm 仅用于开发和打包；Python 只分发 frontend/dist，EXE 仅收集 dist，缺构建明确提示，不回退源码；补充静态根、源码隔离、缺产物、兄弟目录穿越测试。
+- npm 最终页面回归：拆出弹窗和预览面板后，`node scripts/check_vue.mjs` 再次 19/19 通过；合成脱敏报告 + 隔离真实源码服务下 `node scripts/check_browser.mjs` 22/22 通过，20 张预览表 / 97 片段、合并单元格、字段同步 / 定位、自定义字段、响应式均通过；预览同步实测 1534ms，无外部域名请求或控制台异常。截图落 data/，不入库。
+- npm 打包准备：已实际调用 build_exe.build_frontend() 与 collect_data()，确认 build/check 通过且仅收集 dist；check_exe 改为自动发现散列资源、校验七入口 / 许可 / node_modules 隔离。仅验证打包准备，本轮未重建或验收新版 EXE；AGENTS、README、前端任务书及本说明已同步新架构与运行步骤。
+- 全量 Python 测试：`python -m pytest tests -q --tb=short`（使用可用 Python 解释器及 `.venv/Lib/site-packages`）167 项 / 23 个文件全部通过，较上一轮新增 2 项；收集数已复核。首轮沙箱内出现一次本机连接被系统中止，沙箱外完整重跑通过，未修改断言。现有 pytest 插件与 re.split 弃用警告保留。
+
+**下一步（优先级从高到低）：**
+
+1. **npm/Vue 版 exe 发布验收**：多页面构建、需求列表 / 新建 / 详情及阶段百分比已完成，现有 EXE 仍是此前版本。启动条件：需要分发时先在 frontend 执行 npm ci，再运行 scripts/build_exe.py（自动 build/check）、scripts/check_exe.py（当前 18 项）及默认 EXE 模式的 scripts/check_browser.mjs；必须在空目录确认七入口、散列资源、MIT 许可及源码隔离，并复验文字 / 报告创建后跳转详情、真实本机模型等待期间百分比保持、完成结果 / 跳过 / 失败态。
+2. **浏览器回归剩余人工项**：真实源码服务 22 项与 Vue 夹具 32 项自动化已通过（含自动高度 / 拖放提示 / 上传与状态筛选布局稳定、需求删除与项目美化弹窗）；真实模板的错误文件提示（.pdf、空 .docx、超 50MB、无占位符）、上传→设默认→切换模板→生成整条链路、Word 检查自定义字段与 8 张附表仍需验收。模板删除回退、建议采纳 / 标的导入、跨组编辑 / 清空已由夹具覆盖，真实成稿还需核对。启动条件：准备脱敏报告 / 模板与可打开的 Word，截图落 `data/`。
+3. **预览同步性能达标**：Vue 源码联调的「改字段 → 预览可见」实测约 1.5s（此前原生前端 exe 验收约 4.6s），尚未达到端到端 800ms 目标；800ms 防抖本身已占满该目标。启动条件：先分别计时 `preview.build_preview` 与 Vue 渲染，再评估防抖间隔及按 `template_id + mtime` 缓存解析结果；复测以 `scripts/check_browser.mjs` 的实测值为准。
+4. **自定义字段服务端持久化**：目前仅 `localStorage` 按 jobId 暂存，换设备会丢。启动条件：确定 `storage.py` 表结构后加自定义字段表，并让 `/fields` 直接回传。
+5. **预览样式归一化复核**：模板段落样式名是 `null3`，现按「第X章 / 一、 / 1.」文本特征判断层级；换一套章节结构不同的模板要重新验证 `preview._style_of()`。
+6. **工程类模板**：需要独立字段体系（工程量清单、通用/专用合同条款），现有 53 字段覆盖不了。v0.3 已按业务类型补工程类专属字段（生成时写入文末「补充条款」），但正文合同章与工程量清单附表仍依赖先拿到工程类范本原件并单独设计模板。
+7. **评标办法生成器**：评分细则初稿。依赖合规审查已有的判定口径（评分项不得含倾向性）。
+8. **多标段 / 分包识别**：`platform_adapter` 目前固定输出单包 `P1`。
+9. **脱敏样本补充**（`samples/`）：每类模板至少一份，供回归评测。
+10. **合规审查 v2**（可选）：规则可配置化（从 `config/compliance.json` 读取）、误报反馈闭环、前端展示命中项。当前规则写在代码里，新增类别需改代码并发版。
+11. **通用栏目进字段契约**：`是否允许进口产品 / 核心产品 / 价格扣除 / 分项权重 / 付款方式` 目前只能走「补充条款」，要真正填进品目表与标的清单，需在 `fields.json` 新增字段、补模板表格渲染与证据规则。属抽取契约变更，先确认再动。
+

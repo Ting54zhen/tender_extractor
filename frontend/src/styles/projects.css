@@ -10,6 +10,10 @@
   gap: 12px;
 }
 
+/* 空态跨满卡片列并占据可用主区，不再被限制在网格第一列。 */
+.projects-page #grid:has(> .empty) { min-height: max(280px, calc(100dvh - 310px)); }
+.projects-page #grid > .empty { grid-column: 1 / -1; align-self: stretch; justify-content: center; }
+
 .pcard {
   position: relative;
   border: 1px solid var(--line);
@@ -28,7 +32,11 @@
   background: var(--surface-2);
 }
 
-.pcard:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); border-color: #b7b7b0; }
+.pcard:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--ring);
+  border-color: #b7b7b0;
+}
 
 .pcard .name {
   font-weight: 650;
@@ -68,11 +76,23 @@
 }
 
 /* 卡片内的操作默认无框，悬停才浮出边界，避免一排重按钮 */
-.pcard .ops .btn { border-color: transparent; background: transparent; }
-.pcard .ops .btn:hover { background: var(--surface); border-color: var(--line); }
+.pcard .ops .btn {
+  border-color: transparent;
+  background: transparent;
+}
 
-.pcard.archived { background: var(--grey-25); }
-.pcard.archived .name { color: var(--grey-600); }
+.pcard .ops .btn:hover {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.pcard.archived {
+  background: var(--grey-25);
+}
+
+.pcard.archived .name {
+  color: var(--grey-600);
+}
 
 .badge.archived {
   color: var(--amber);

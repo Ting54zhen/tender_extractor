@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """PyInstaller 打包脚本：把组件打成单文件 exe，双击即跑。
 
-产物内嵌：抽取配置（config）、前端页面（frontend -> 包内 static）、
+产物内嵌：抽取配置（config）、前端产物（frontend/dist -> 包内 static）、
 compiled 招标模板（templates/compiled）。数据（SQLite/结果/设置覆盖）
 运行时写在 exe 同目录 data/，便携可拷贝。
 
+准备：开发机先在 frontend 执行 npm ci；本脚本自动构建并校验前端。
 用法（在项目根目录，用 .venv 运行）：
     .venv/Scripts/python scripts/build_exe.py
 产物：dist/招标需求解析.exe
@@ -13,6 +14,7 @@ compiled 招标模板（templates/compiled）。数据（SQLite/结果/设置覆
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -38,11 +40,30 @@ def ensure_pyinstaller():
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller>=6.0"])
 
 
-def collect_data():
-    "--add-data 参数：源路径<分隔符>包内路径；Windows 用 `;`、macOS/Linux 用 `:`"
+def build_frontend() -> None:
+    """每次打包先重新构建，避免装入旧页面；依赖安装由开发者显式执行。"""
+    frontend = ROOT / "frontend"
+    npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
+    if not npm or not (frontend / "node_modules" / "vite").is_dir():
+        _fail("请安装 Node.js，并先在 frontend 执行 npm ci；打包脚本不会自动联网安装前端依赖。")
+    subprocess.check_call([npm, "run", "build"], cwd=frontend)
+    subprocess.check_call([npm, "run", "check"], cwd=frontend)
+
+
+def collect_data() -> list[str]:
+    """只收集运行资源；Windows 分隔符为分号，其他系统为冒号。"""
+    # 仅打包 dist，禁止把 npm 依赖、SFC 源码或开发配置装入运行时。
+    pages = ("index", "fill", "templates", "projects", "settings", "company", "compare")
+    resources = (
+        "assets/VUE-LICENSE.txt", "assets/VITE-LICENSE.txt", "assets/THIRD-PARTY-NOTICES.txt",
+        *(f"{page}.html" for page in pages),
+    )
+    for name in resources:
+        if not (ROOT / "frontend" / "dist" / name).is_file():
+            _fail("缺少前端构建产物：" + name + "；请先执行 npm run build。")
     pairs = [
         (SRC / "tender_extractor" / "config", "tender_extractor/config"),
-        (ROOT / "frontend", "tender_extractor/static"),
+        (ROOT / "frontend" / "dist", "tender_extractor/static"),
         (ROOT / "templates" / "compiled", "templates/compiled"),
     ]
     args = []
@@ -80,6 +101,7 @@ def hidden_imports():
 def main():
     if not ENTRY.is_file():
         _fail("缺少入口文件：" + str(ENTRY))
+    build_frontend()
     ensure_pyinstaller()
 
     cmd = [

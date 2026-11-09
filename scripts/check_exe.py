@@ -6,7 +6,10 @@
 真的能独立跑起来。frozen 下的路径解析（_MEIPASS）最容易在这里暴露。
 """
 
+from __future__ import annotations
+
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -25,11 +28,13 @@ BASE = f"http://127.0.0.1:{PORT}"
 CHECKS = [
     ("/projects", 200, "项目工作台"),
     ("/settings", 200, "设置页"),
-    ("/assets/projects.js", 200, "项目页脚本"),
     ("/templates", 200, "模板库页"),
     ("/fill", 200, "填写工作台"),
-    ("/assets/preview.css", 200, "预览样式"),
-    ("/assets/preview.js", 200, "预览渲染器"),
+    ("/", 200, "需求解析页"),
+    ("/company", 200, "企业档案页"),
+    ("/compare", 200, "文档比对页"),
+    ("/assets/VUE-LICENSE.txt", 200, "Vue MIT 许可证"),
+    ("/assets/THIRD-PARTY-NOTICES.txt", 200, "第三方资源声明"),
     ("/api/templates", 200, "模板库接口"),
 ]
 
@@ -109,19 +114,27 @@ def main() -> int:
                 results.append((label, passed))
                 print(f"[check] {label}: HTTP {status} {'OK' if passed else 'FAIL'}")
 
-            # 页面内容：确认打包进去的是新版前端，而不是旧页面凑巧返回 200
-            _, body = get(f"{BASE}/templates")
-            text = decode(body)
-            results.append((
-                "模板库页含上传与占位符入口",
-                "上传模板" in text and "占位符" in text,
-            ))
-            _, body = get(f"{BASE}/fill")
-            text = decode(body)
-            results.append((
-                "填写页含预览与自定义字段",
-                "生成前预览" in text and "自定义字段" in text,
-            ))
+            # SFC 模板已编译进散列 JS，不再从空挂载 HTML 中寻找界面文案。
+            # 根据真实 HTML 发现全部入口、预加载与样式，避免把旧文件名写死。
+            assets: set[str] = set()
+            entries_ok = True
+            for page in ("index", "fill", "templates", "projects", "company", "settings", "compare"):
+                status, body = get(f"{BASE}/{page}.html")
+                text = decode(body)
+                refs = [url for url in re.findall(r'(?:src|href)="([^"]+)"', text) if not url.startswith("data:")]
+                entries_ok &= status == 200 and 'id="vue-root"' in text and bool(refs)
+                entries_ok &= all(url.startswith("/assets/") for url in refs)
+                assets.update(refs)
+            results.append(("七个 Vue 多页面入口与本地引用完整", entries_ok))
+            assets_ok = True
+            for asset in sorted(assets):
+                status, body = get(BASE + asset)
+                assets_ok &= status == 200 and bool(body)
+            results.append(("全部构建脚本与样式可读", assets_ok and bool(assets)))
+            _, body = get(BASE + "/assets/VUE-LICENSE.txt")
+            results.append(("MIT 许可证内容有效", b"MIT License" in body))
+            # 验证发布的静态根不暴露 npm 开发文件。
+            results.append(("未发布 node_modules", get(BASE + "/node_modules/vue/package.json")[0] == 404))
 
             # 内置模板与 frozen 路径解析：列表能和占位符对上，预览才真能跑
             status, body = get(f"{BASE}/api/templates")

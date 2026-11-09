@@ -11,18 +11,19 @@
 //   TENDER_SAMPLE    指定一份 .docx 需求报告（否则在 data/ 与 samples/ 里找）
 //   TENDER_CHROME    指定浏览器 exe（默认依次找 Chrome / Edge）
 //   TENDER_BROWSER_PORT / TENDER_CDP_PORT  端口（默认 8899 / 9333）
-// 前提：先跑 scripts/build_exe.py 生成 dist/招标需求解析.exe。
+// 默认验证打包产物；TENDER_CHECK_URL 可指向隔离的源码服务，复用同一交互检查。
+// 源码模式不启动/终止外部服务，结束时只清理自己创建的浏览器目录。
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXE_SRC = path.join(ROOT, 'dist', '招标需求解析.exe');
+const CHECK_URL = process.env.TENDER_CHECK_URL || '';
 const PORT = Number(process.env.TENDER_BROWSER_PORT || 8899);
 const CDP_PORT = Number(process.env.TENDER_CDP_PORT || 9333);
-const BASE = `http://127.0.0.1:${PORT}`;
+const BASE = CHECK_URL || `http://127.0.0.1:${PORT}`;
 const OUT = path.join(ROOT, 'data', 'browser-check');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -54,7 +55,7 @@ function killTree(proc) {
   if (!proc || !proc.pid) return;
   if (process.platform === 'win32') {
     // onefile 会拉起子进程，只杀引导器会留下占端口的孤儿进程
-    try { execFileSync('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { stdio: 'ignore' }); } catch { /* 已退出 */ }
+    try { execFileSync('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { stdio: 'ignore', windowsHide: true }); } catch { /* 已退出 */ }
   } else {
     try { proc.kill('SIGKILL'); } catch { /* 已退出 */ }
   }
@@ -80,15 +81,15 @@ function findSample() {
 }
 
 function main() {
-  if (!fs.existsSync(EXE_SRC)) throw new Error('缺少 dist exe，请先跑 scripts/build_exe.py');
+  if (!CHECK_URL && !fs.existsSync(EXE_SRC)) throw new Error('缺少 dist exe，请先跑 scripts/build_exe.py');
   if (!CHROME) throw new Error('找不到 Chrome/Edge，请设置 TENDER_CHROME 指向浏览器 exe');
   const sample = findSample();
   if (!sample) throw new Error('找不到 .docx 需求报告样本，请设置 TENDER_SAMPLE');
 
   fs.mkdirSync(OUT, { recursive: true });
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tender-cdp-'));
+  const tmp = fs.mkdtempSync(path.join(OUT, 'tender-cdp-'));
   const exe = path.join(tmp, '招标需求解析.exe');
-  fs.copyFileSync(EXE_SRC, exe);
+  if (!CHECK_URL) fs.copyFileSync(EXE_SRC, exe);
   const profile = path.join(tmp, 'chrome-profile');
 
   let web = null;
@@ -118,12 +119,12 @@ function main() {
   };
 
   const run = async () => {
-    web = spawn(exe, ['--no-browser', `--port=${PORT}`], { cwd: tmp, stdio: 'ignore' });
+    if (!CHECK_URL) web = spawn(exe, ['--no-browser', `--port=${PORT}`], { cwd: tmp, stdio: 'ignore', windowsHide: true });
     await waitFor(async () => {
       const r = await fetch(`${BASE}/api/health`);
       return r.ok ? true : null;
     }, 60000, 'exe 服务就绪');
-    add('exe 在空目录独立启动', true, `${BASE}/api/health 200`);
+    add(CHECK_URL ? '真实 Python 服务联通' : 'exe 在空目录独立启动', true, `${BASE}/api/health 200`);
 
     const buf = fs.readFileSync(sample);
     const created = await fetch(
@@ -144,7 +145,7 @@ function main() {
       '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
       '--remote-allow-origins=*', `--remote-debugging-port=${CDP_PORT}`,
       `--user-data-dir=${profile}`, '--window-size=1440,900', 'about:blank',
-    ], { stdio: 'ignore' });
+    ], { stdio: 'ignore', windowsHide: true });
     const target = await waitFor(async () => {
       const r = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`);
       const list = await r.json();
@@ -199,12 +200,15 @@ function main() {
       cards?.count >= 3 && /货物类/.test(cards.text) && /竞争性磋商/.test(cards.text),
       `${cards?.count} 张卡片`);
     await shot('01-模板库列表.png');
-    const detail = await ev(`(function(){
+    await ev(`(function(){
       var b=document.querySelector('[data-act="detail"]'); if(!b) return null;
       b.click();
-      var d=document.querySelector('dialog[open]');
-      return d ? {open:true, text:d.innerText.slice(0,160)} : {open:false};
     })()`);
+    // Vue 在事件结束后更新 DOM；等到实际占位符出现，避免只检查空弹窗。
+    const detail = await waitDom(`(function(){
+      var d=document.querySelector('#dlgDetail[open]');
+      return d && d.querySelectorAll('.ph-list .row').length ? {open:true, text:d.innerText.slice(0,160)} : null;
+    })()`, '模板占位符详情渲染');
     add('模板占位符详情弹窗可打开', !!detail?.open, JSON.stringify(detail));
 
     await go(`/fill?job=${job.id}`, 1200);
@@ -275,7 +279,7 @@ function main() {
       `document.getElementById('paper').innerText.indexOf('CDP预览同步标记')>=0`,
       '改字段后预览同步', 10000
     );
-    add('改字段后预览同步（800ms debounce）', !!synced,
+    add('改字段后预览同步（800ms debounce；不等同总耗时目标）', !!synced,
       `实测 ${Date.now() - syncStart}ms，占位符 ${edited}`);
 
     // 只点确实有对应字段的片段，避免点到「未绑定占位符」时按设计只弹 toast
@@ -313,10 +317,13 @@ function main() {
     })()`);
     add('自定义字段弹窗可打开', !!dlg);
     await shot('03-自定义字段弹窗.png');
-    // fill.html 的变量包在 IIFE 里，只能从 URL 与 localStorage 侧验证
+    // 从用户可见结果和持久化侧验证，不读取 Vue 内部组件状态。
     const saved = await ev(`(function(){
       document.getElementById('cfLabel').value='浏览器回归字段';
       document.getElementById('cfValue').value='BR-TEST-001';
+      // 模拟真实输入事件，让 v-model 接收新值；直接赋 .value 不会触发输入。
+      document.getElementById('cfLabel').dispatchEvent(new Event('input',{bubbles:true}));
+      document.getElementById('cfValue').dispatchEvent(new Event('input',{bubbles:true}));
       document.getElementById('cfSave').click();
       var jid=new URLSearchParams(location.search).get('job');
       return {stored: localStorage.getItem('tender.customFields.'+jid),
@@ -464,18 +471,26 @@ function main() {
 
   return run()
     .catch((err) => { add('执行异常', false, err.stack || String(err)); })
-    .finally(() => {
+    .finally(async () => {
       try { ws?.close(); } catch { /* noop */ }
       killTree(chrome);
       killTree(web);
-      try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* noop */ }
+      // Windows 的浏览器子进程可能稍后才释放配置目录，先等退出再清理。
+      if (chrome?.exitCode === null) await Promise.race([
+        new Promise(resolve => chrome.once('exit', resolve)), sleep(3000),
+      ]);
+      // 只允许清理本次创建、位于回归输出目录内的工作目录。
+      if (path.dirname(tmp) === path.resolve(OUT) && path.basename(tmp).startsWith('tender-cdp-')) {
+        try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); }
+        catch (error) { console.error(`[browser] 临时目录清理失败：${tmp} ${error.message}`); process.exitCode = 1; }
+      }
       const failed = results.filter((r) => !r.pass);
       for (const r of results) {
         console.log(`[browser] ${r.pass ? 'OK  ' : 'FAIL'} ${r.name}${r.detail ? ' :: ' + r.detail.slice(0, 180) : ''}`);
       }
       console.log(`[browser] 检查项：${results.length - failed.length}/${results.length} 通过`);
       console.log(`[browser] 截图目录：${OUT}`);
-      process.exitCode = failed.length ? 1 : 0;
+      if (failed.length) process.exitCode = 1;
     });
 }
 

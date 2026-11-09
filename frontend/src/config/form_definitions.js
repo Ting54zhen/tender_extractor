@@ -1,0 +1,59 @@
+/* 表单字段定义沿用原页面；金额仍作为字符串输入，交给后端 Decimal 处理。 */
+var FIELDS = {
+  llm: [
+    { key: "enabled", type: "bool", label: "启用模型", hint: "关闭后仅规则抽取" },
+    {
+      key: "provider", type: "enum", label: "接入方式",
+      hint: "ollama=本机；openai=任意 OpenAI 兼容接口",
+      options: [["ollama", "Ollama（本机）"], ["openai", "OpenAI 兼容 API"]]
+    },
+    {
+      key: "base_url", type: "text", label: "服务地址",
+      hint: "如 http://127.0.0.1:11434 或 https://api.deepseek.com/v1"
+    },
+    { key: "model", type: "text", label: "模型名", hint: "如 qwen2.5:3b-instruct、deepseek-chat" },
+    { key: "api_key_env", type: "text", label: "API Key 环境变量", hint: "推荐用环境变量，不把 key 写进配置" },
+    { key: "timeout_seconds", type: "number", label: "超时（秒）" },
+    { key: "max_tokens", type: "number", label: "最大输出 tokens" },
+    { key: "json_mode", type: "bool", label: "JSON 模式", hint: "服务不支持时自动降级" },
+    { key: "max_repair_rounds", type: "number", label: "校验回喂轮数", hint: "0 = 不修复" },
+  ],
+  review: [
+    { key: "enabled", type: "bool", label: "启用第三方复核" },
+    {
+      key: "provider", type: "enum", label: "复核接入方式",
+      options: [["ollama", "Ollama（本机）"], ["openai", "OpenAI 兼容 API"]]
+    },
+    { key: "base_url", type: "text", label: "复核服务地址" },
+    { key: "model", type: "text", label: "复核模型名" },
+    { key: "api_key_env", type: "text", label: "复核 API Key 环境变量" },
+  ],
+  extraction: [
+    { key: "min_confidence", type: "number", label: "最低置信度" },
+    {
+      key: "require_tender_document", type: "bool", label: "强制文档类型校验",
+      hint: "关闭后非招标文件也会抽取"
+    },
+    {
+      key: "document_type_threshold", type: "number", label: "文档类型阈值",
+      hint: "默认 4.0，误判时可调低"
+    },
+  ],
+  output: [
+    { key: "dir", type: "text", label: "结果输出目录", hint: "留空用默认数据目录" },
+  ],
+};
+
+var BASIC = [
+  ["name", "企业名称"], ["credit_code", "统一社会信用代码"], ["registered_capital", "注册资本"],
+  ["founded", "成立日期"], ["address", "注册地址"], ["legal_person", "法定代表人"],
+  ["contact_name", "联系人"], ["contact_phone", "联系电话"], ["business_scope", "经营范围"]
+];
+var LIST_DEFS = {
+  qualifications: { id: "qualifications", add: "add-q", fields: [["name", "资质名称*"], ["certificate_no", "证书编号"], ["issuer", "发证机构"], ["valid_until", "有效期至"], ["evidence", "扫描件位置/说明"]] },
+  performances: { id: "performances", add: "add-p", fields: [["project_name", "项目名称*"], ["amount", "合同金额"], ["year", "年度"], ["client", "甲方"], ["evidence", "中标通知书/合同位置"]] },
+  personnel: { id: "personnel", add: "add-r", fields: [["name", "姓名*"], ["role", "拟任角色"], ["title", "职称"], ["certificate", "执业证书"], ["years", "从业年限"]] }
+};
+
+
+export const formDefinitions = { settings: FIELDS, basic: BASIC, lists: LIST_DEFS };

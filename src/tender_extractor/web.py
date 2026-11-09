@@ -55,18 +55,18 @@ PROJECT_ROOT = BASE_DIR.parent.parent
 
 
 def _resolve_frontend_dir() -> Path:
-    """解析前端目录：环境变量优先，其次项目根 frontend/，最后回退包内 static/。
+    """只分发构建后的前端，避免将源码、依赖和配置暴露给浏览器。
 
-    前端已从 Python 包中独立为顶层 ``frontend/`` 目录，供团队成员单独修改；
-    设置 ``TENDER_FRONTEND_DIR`` 可指向任意自定义前端目录。
+    环境变量指向自定义构建目录；源码运行使用 frontend/dist，冻结程序
+    使用包内 static。缺少构建时保留预期路径，由页面请求给出操作提示，
+    不影响无需 Web 界面的命令行功能或自动触发联网安装。
     """
     override = os.environ.get("TENDER_FRONTEND_DIR", "")
     if override:
         return Path(override)
-    default = PROJECT_ROOT / "frontend"
-    if default.is_dir():
-        return default
-    return BASE_DIR / "static"
+    if getattr(sys, "frozen", False):
+        return BASE_DIR / "static"
+    return PROJECT_ROOT / "frontend" / "dist"
 
 
 STATIC_DIR = _resolve_frontend_dir()
@@ -242,6 +242,7 @@ class Job:
     project_id: str | None = None
     status: str = "queued"          # queued | running | done | skipped | error
     stage: str = "排队中"
+    progress: int = 0              # 实际处理阶段的完成比例；仅结果保存成功后达到 100。
     error: str = ""
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
@@ -260,6 +261,7 @@ class Job:
         return {
             "id": self.id,
             "kind": "extract",
+            "progress": 100 if self.status in {"done", "skipped"} else self.progress,
             "project_id": self.project_id,
             "filename": self.filename,
             "status": self.status,
@@ -1217,6 +1219,24 @@ class Service:
         ).start()
         return job
 
+    def delete_requirement(self, job_id: str) -> bool:
+        """删除已结束的需求记录和确认值；保留用户已下载 / 保存的本机文档。
+
+        活跃任务不能删除，避免后台线程继续写入结果；数据库与内存缓存
+        在同一锁内移除，确保删除成功后不会再通过缓存取回旧详情。
+        """
+        job = self.get(job_id)
+        if job is None:
+            return False
+        if isinstance(job, CompareJob):
+            raise ValueError("该接口仅支持删除需求解析记录")
+        if job.status in {"queued", "running"}:
+            raise RuntimeError("需求正在解析中，请等待结束后再删除")
+        with self.lock:
+            deleted = self.db.delete_job(job_id)
+            self.jobs.pop(job_id, None)
+        return deleted
+
     def get(self, job_id: str) -> Job | CompareJob | None:
         with self.lock:
             job = self.jobs.get(job_id)
@@ -1287,6 +1307,12 @@ class Service:
             self.jobs.pop(old.id, None)
 
     def _run(self, job: Job, path: Path) -> None:
+        """将引擎里程碑暴露给轮询接口；模型等待期间不虚构时间进度。"""
+        def update_progress(percent: int, stage: str) -> None:
+            """仅在实际进入新阶段时前进，失败时保留最后一个已知百分比。"""
+            job.progress = max(job.progress, min(99, percent))
+            job.stage = stage
+
         job.status = "running"
         job.stage = "解析文档并抽取字段"
         self.db.update_job(job.id, status="running", stage=job.stage)
@@ -1296,7 +1322,9 @@ class Service:
                 path,
                 use_llm=job.use_llm,
                 allow_non_tender=job.allow_non_tender,
+                on_progress=update_progress,
             )
+            update_progress(95, "解析完成，正在保存结果与审核报告")
             data = result.to_dict()
             report = render_markdown(result)
 
@@ -1319,6 +1347,7 @@ class Service:
             )
             job.status = "skipped" if data.get("meta", {}).get("extraction_skipped") else "done"
             job.stage = "已跳过" if job.status == "skipped" else "完成"
+            job.progress = 100
         except Exception as exc:
             job.status = "error"
             job.stage = "失败"
@@ -1479,7 +1508,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in {"/templates", "/templates.html"}:
             return self._serve_static("templates.html")
         if path.startswith("/assets/"):
-            return self._serve_static(path[len("/assets/"):])
+            return self._serve_static(path.lstrip("/"))
         if path.startswith("/api/templates"):
             return self._handle_template_get(path)
         if path == "/api/health":
@@ -1572,9 +1601,21 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
 
     def do_DELETE(self) -> None:  # noqa: N802
+        """删除接口保持资源路径精确匹配，不让附加子路径误删任务。"""
         parsed = urlparse(self.path)
         if re.fullmatch(r"/api/templates/[^/]+", parsed.path):
             return self._handle_template_delete(parsed.path)
+        if re.fullmatch(r"/api/jobs/[^/]+", parsed.path):
+            job_id = parsed.path.rsplit("/", 1)[1]
+            try:
+                deleted = self.service.delete_requirement(job_id)
+            except ValueError as exc:
+                return self._send_json({"error": str(exc)}, 400)
+            except RuntimeError as exc:
+                return self._send_json({"error": str(exc)}, 409)
+            if not deleted:
+                return self._send_json({"error": "任务不存在"}, 404)
+            return self._send_json({"deleted": job_id})
         return self._send_json({"error": "未找到该路径"}, 404)
 
     # ------------------------------------------------------------------
@@ -1890,6 +1931,7 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_static("index.html")
 
     MIME_TYPES = {
+        ".txt": "text/plain; charset=utf-8",
         ".html": "text/html; charset=utf-8",
         ".css": "text/css; charset=utf-8",
         ".js": "text/javascript; charset=utf-8",
@@ -1901,11 +1943,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_static(self, name: str) -> None:
         target = (STATIC_DIR / name).resolve()
-        # 只允许静态目录内的文件，防目录穿越
-        if not str(target).startswith(str(STATIC_DIR.resolve())):
+        # 用路径层级判断，防止同名前缀的兄弟目录绕过检查。
+        if not target.is_relative_to(STATIC_DIR.resolve()):
             return self._send_json({"error": "非法路径"}, 403)
         if not target.is_file():
-            return self._send_json({"error": f"缺少前端文件：{target}"}, 500)
+            if name.endswith(".html"):
+                return self._send_json({"error": "缺少前端构建产物，请在 frontend 目录执行 npm ci 和 npm run build；自定义目录请检查 TENDER_FRONTEND_DIR。"}, 503)
+            return self._send_json({"error": "静态资源不存在"}, 404)
         body = target.read_bytes()
         mime = self.MIME_TYPES.get(target.suffix.lower(), "text/html; charset=utf-8")
         self.send_response(200)

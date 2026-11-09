@@ -20,9 +20,9 @@
 默认 `provider=ollama`，文档不出本机；Web 服务默认只监听 `127.0.0.1`。
 判定：新增代码里出现向外部域名发请求，且不是用户显式开启的 `provider=openai` 路径 → 违规。
 
-**② 零第三方 Web 依赖**
-后端只用标准库 `http.server`；前端是纯 HTML/CSS/JS，无 CDN、无构建工具、无外部资源引用。
-判定：`pyproject.toml` 的 `dependencies` 变长，或 HTML 里出现 `http(s)://` 的外部 `<script>` / `<link>` → 违规（需用户事先同意）。
+**② Web 资源本机分发**
+后端只用标准库 `http.server`；前端使用 Vue 3 多页面，生产版资源随仓库与 exe 本地分发，保留 MIT 许可证；无 CDN、无外部运行资源引用；用户已授权仅在开发机使用 npm + Vite 构建。
+判定：新增 Python 运行时依赖、HTML 引用外部 `<script>` / `<link>`，或前端需联网加载运行资源 → 违规（需用户事先同意）。用户已明确授权 Vue + npm + Vite，此例外不扩展到其他框架或大型组件库。
 
 **③ 证据可回链**
 任何由模型产出的值，必须带 `block_id` + 原文 `quote`，且值真的出现在引文里，否则丢弃。
@@ -36,16 +36,17 @@
 | 运行时依赖 | `python-docx`、`docxtpl`；PDF 可选 `pdfplumber` |
 | 模型 | 本地 Ollama（默认）或 OpenAI 兼容接口 |
 | Web | 标准库 `http.server`，无框架 |
+| 前端 | Vue 3.5.45 + Vite 8.3.6（MIT），npm 管理，多页面、沿用 CSS |
 | 测试 | pytest |
 
-**禁止引入**：Flask / FastAPI / Django、React / Vue / 任何前端框架或打包器、PyMuPDF（AGPL）、任何新运行时依赖——除非用户明确要求并确认许可证。
+**禁止引入**：Flask / FastAPI / Django、React / 其他前端框架或未经授权的打包器、Vue Router / Pinia / 大型组件库、PyMuPDF（AGPL）、任何新 Python 运行时依赖——除非用户明确要求并确认许可证。前端只发布 `frontend/dist/` 构建产物，Node/npm 仅开发和打包时使用；锁定版本、保留锁文件与 MIT 许可。
 
 ## 4. 目录边界
 
 | 目录 | 改之前要知道 |
 |---|---|
 | `src/tender_extractor/` | 核心引擎。改它就必须跑全量测试 |
-| `frontend/` | 界面。改它刷新浏览器即可生效，不需要重启服务 |
+| `frontend/` | 界面。Vite 开发模式热更新；Python 模式需 npm run build 后刷新，无需重启 |
 | `tests/` | 改动 `src/` 必须同步；禁止为了过测试而删断言 |
 | `templates/` | `compiled/` 是 `prepare_template.py` 生成的，**不要手改** |
 | `data/` | 真实采购文件与本机数据，**严禁提交**（已在 `.gitignore`） |
@@ -60,6 +61,9 @@ python -m pytest tests -q                          # 全量测试（必须全绿
 python -m tender_extractor extract "文件.docx"      # 完整链路抽取
 python -m tender_extractor extract "文件.docx" --no-llm   # 仅规则，不依赖模型
 python -m tender_extractor generate "文件.docx"     # 生成招标文件 .docx
+npm --prefix frontend ci                          # 首次安装前端锁定依赖
+npm --prefix frontend run dev                     # Vite 开发，127.0.0.1:5173
+npm --prefix frontend run build                   # 构建本机前端资源
 python -m tender_extractor.web                     # 本地网页，127.0.0.1:8765
 python scripts/prepare_template.py                 # 源模板 → compiled/
 python scripts/build_exe.py                        # 打包 exe（产物 dist/）
@@ -96,7 +100,7 @@ Windows 下也可用 `start.bat <子命令>`。输出默认落在 `data/结果�
 
 ## 9. 禁止清单
 
-- 不新增运行时依赖，不引入 Web 框架或前端构建工具。
+- 不新增 Python 运行时依赖，不引入后端 Web 框架；Vue + npm + Vite 是已授权的前端例外，不增加 Router / Pinia / 大型组件库。
 - 不改 API 契约（`/api/*` 路径或字段结构）而不同步 `frontend/README.md`。
 - 不伪造证据、不在测试里写死样本答案来“通过”。
 - 不删除 `.codebuddy/`、`tests/`、`samples/`、`templates/`。
