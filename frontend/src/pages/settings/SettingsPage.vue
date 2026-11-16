@@ -10,7 +10,7 @@ export default { components: { AppShell }, setup: usePage };
   <div class="shell">
     <AppShell></AppShell>
     <main class="main">
-      <div class="main-inner narrow">
+      <div class="main-inner">
         <div class="page-head">
           <h1>设置</h1>
           <p>出厂默认来自 config/settings.json；此处保存的覆盖值存于本机数据库，立即生效</p>

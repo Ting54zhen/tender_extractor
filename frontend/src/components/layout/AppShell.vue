@@ -1,4 +1,5 @@
 <script>
+import { useTheme } from '../../composables/use_theme.js';
 /* 共享导航采用 Vue 组件，普通 a 链接继续走 Python 现有多页面路径。
  * 图标全部为项目内固定 SVG，不把接口或文档文本作为 HTML 注入。
  */
@@ -31,6 +32,7 @@ export default {
     const query = new URLSearchParams(location.search);
     const isNew = query.get('view') === 'new' && !query.has('job');
     return {
+      ...useTheme(),
       items: ITEMS, icons: ICONS, path,
       active: href => href === "/" ? !isNew && (path === "/" || path === "/index") : path === href
     };
@@ -40,7 +42,14 @@ export default {
 
 <template>
   <aside class="sidebar">
-    <div class="sb-brand"><a class="sb-logo" href="/" aria-label="招标需求解析">T</a><span class="sb-word">招标需求解析</span></div>
+    <div class="sb-brand"><a class="sb-logo" href="/" aria-label="招标需求解析">T</a><span class="sb-word">招标需求解析</span>
+      <!-- 主题入口位于品牌旁，窄屏折叠侧栏后仍可直接使用；图标为本地 SVG。 -->
+      <button type="button" class="theme-toggle" id="theme-toggle" :aria-label="themeLabel" :title="themeLabel"
+          :aria-pressed="dark" @click="toggleTheme"><svg viewBox="0 0 24 24" aria-hidden="true">
+          <template v-if="dark"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/></template>
+          <path v-else d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/>
+        </svg></button><span class="sr-only" role="status">{{ themeMessage }}</span>
+    </div>
     <a class="sb-new" href="/?view=new"><svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M12 5v14M5 12h14" />
       </svg><span>新建解析</span></a>

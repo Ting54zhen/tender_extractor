@@ -15,7 +15,15 @@
 }
 
 .paper {
-  width: 210mm;
+  /* 预览模拟纸质成稿，始终保持白纸黑字；高亮也使用浅色语义变量，
+     不继承深色界面的浅字深底，避免黄色待补充片段在纸面上失去对比。 */
+  color-scheme: light;
+  --blue: #2b5fd9;
+  --blue-soft: #eef2fd;
+  --amber: #96661c;
+  --amber-soft: #fbf4e7;
+  --amber-line: #eddfc2;
+  width: min(210mm, 100%);
   min-height: 297mm;
   padding: 20mm 18mm;
   margin: 0 auto;
@@ -104,6 +112,7 @@
 
 .seg-missing {
   background: var(--amber-soft);
+  color: var(--amber);
   border-bottom: 1px dashed var(--amber-line);
   cursor: pointer;
   border-radius: 2px;
@@ -186,7 +195,7 @@
 .pv-loading {
   position: absolute;
   inset: 0;
-  background: rgba(255, 255, 255, .72);
+  background: var(--loading-glass);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -213,14 +222,47 @@
 /* ------------------------------------------- 模板库里的预览弹窗 ---- */
 
 dialog.dlg-preview {
-  width: min(860px, 94vw);
+  width: min(960px, 94vw);
   max-height: 92vh;
+  overflow: hidden;
 }
 
 .dlg-preview .dlg-body {
   padding: 16px;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .dlg-preview .preview-scroll {
-  max-height: 72vh;
+  max-height: 65vh;
+  min-height: 0;
+}
+
+/* 模板、填写与图谱共用布局；窗口放大使用视口尺寸，内容区独立滚动，操作始终可见。 */
+.preview-dialog-head, .preview-dialog-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.preview-dialog-head { margin-bottom: 12px; }
+.preview-dialog-head h3 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.preview-dialog-head .spacer, .preview-dialog-tools .spacer, .graph-toolbar .spacer { flex: 1; }
+.preview-dialog-tools { margin-bottom: 12px; }
+.dlg-preview .preview-dialog-tools label.chip { display: inline-flex; align-items: center; margin: 0; }
+.dlg-preview .preview-dialog-tools input[type="checkbox"] { width: auto; }
+.preview-content { position: relative; min-height: 0; }
+.dlg-preview .pv-hint { flex: none; margin: 10px 0 0; }
+.dlg-preview .dlg-foot { flex: none; margin-top: 12px; }
+dialog.dlg-preview.preview-expanded { width: 96vw; max-height: 96dvh; }
+.dlg-preview.preview-expanded .dlg-body { max-height: 96dvh; }
+.dlg-preview.preview-expanded .preview-scroll { max-height: 75dvh; }
+
+/* 小图完整缩入容器，不通过隐藏溢出裁掉节点；仅手动放大后的弹窗才出现滚动条。 */
+.knowledge-graph { margin-bottom: 12px; }
+.graph-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.graph-fit { width: 100%; }
+.graph-fit svg { display: block; width: 100%; height: auto; }
+.graph-scroll { max-height: 65dvh; min-height: 0; overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); }
+.preview-expanded .graph-scroll { max-height: 75dvh; }
+@media (max-width: 600px) {
+  .preview-scroll { padding: 8px; }
+  .paper { padding: 24px 16px; min-height: 0; font-size: 11pt; }
+  .preview-dialog-head h3 { flex-basis: 100%; }
 }

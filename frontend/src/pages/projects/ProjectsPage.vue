@@ -11,7 +11,7 @@ export default { components: { AppShell, DeleteConfirmDialog }, setup: usePage }
   <div class="shell">
     <AppShell></AppShell>
     <main class="main">
-      <div class="main-inner wide projects-page">
+      <div class="main-inner projects-page">
         <div class="page-head">
           <h1>项目工作台</h1>
           <p>按采购项目归档任务；归档不删数据，随时恢复</p>

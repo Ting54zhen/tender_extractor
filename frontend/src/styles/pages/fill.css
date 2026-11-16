@@ -1,38 +1,6 @@
-/* 本页专属：页头进度、左侧分组导航、字段列表工作区 */
-
-.fill-head {
-  display: flex;
-  align-items: flex-end;
-  gap: 24px;
-  flex-wrap: wrap;
-  padding: 4px 0 14px;
-}
-
-.fill-head-main {
-  flex: 1 1 240px;
-  min-width: 0;
-}
-
-.fill-head h1 {
-  font-family: var(--font-serif);
-  font-size: 30px;
-  font-weight: 400;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-  margin: 0 0 4px;
-}
-
-.fill-head p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12.5px;
-  word-break: break-all;
-}
-
-.fill-head-actions {
-  display: flex;
-  gap: 8px;
-}
+/* 本页专属：页头进度、左侧分组导航、字段列表工作区。
+   标题与操作区由 app.css 统一维护；长文件名只在说明文本内部换行。 */
+#fileInfo { overflow-wrap: anywhere; }
 
 .progress {
   margin: 0 0 16px;
@@ -48,7 +16,8 @@
 
 .progress .bar>i {
   width: 0;
-  background: var(--ink);
+  /* 就绪进度使用绿色，和已抽取字段的语义保持一致。 */
+  background: var(--green);
   animation: none;
   transition: width .3s ease;
 }
@@ -106,12 +75,12 @@
 
   .nav a.active {
     border-color: var(--ink);
-    background: var(--ink);
-    color: #fff;
+    background: var(--primary-bg);
+    color: var(--primary-text);
   }
 
   .nav a.active .count {
-    color: rgba(255, 255, 255, .7);
+    color: inherit;
   }
 
   .nav a .warn-dot {
@@ -357,21 +326,24 @@ section.group {
 }
 
 .tag.work {
-  color: var(--blue-700);
-  background: var(--blue-50);
-  border-color: var(--blue-200);
+  /* 人工编辑用蓝色提示，与带原文证据的绿色「已抽取」标签区分。 */
+  color: var(--blue);
+  background: var(--blue-soft);
+  border-color: var(--blue-line);
 }
 
 .field input[type=text],
+.field select,
 .field textarea {
   width: 100%;
   font-size: 13.5px;
-  resize: vertical;
   line-height: 1.6;
 }
 
 .field textarea {
   min-height: 76px;
+  /* 只有多行文字允许拉高，原生下拉框保持统一控件高度。 */
+  resize: vertical;
 }
 
 .field .empty-hint {
@@ -391,7 +363,7 @@ section.group {
   background: var(--green-soft);
   border: 1px dashed var(--green-line);
   font-size: 12.5px;
-  color: #0a6b48;
+  color: var(--green);
 }
 
 .hist-hint b {
@@ -417,7 +389,7 @@ section.group {
   background: var(--amber-soft);
   border: 1px dashed var(--amber-line);
   font-size: 12.5px;
-  color: #8a4d0a;
+  color: var(--amber);
 }
 
 .sugg-hint b {
@@ -508,8 +480,8 @@ section.group {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: var(--grey-900);
-  color: #fff;
+  background: var(--primary-bg);
+  color: var(--primary-text);
   padding: 10px 18px;
   border-radius: var(--r);
   font-size: 13px;
@@ -556,23 +528,18 @@ section.group {
   flex-direction: column;
   gap: 5px;
   min-width: 150px;
+  max-width: 100%;
 }
 
 .scope-item label {
   font-size: 11px;
-  color: var(--faint);
+  color: var(--muted);
   letter-spacing: .04em;
 }
 
 .scope-item select {
-  font: inherit;
-  font-size: 13px;
-  color: var(--ink);
-  background: #fff;
-  padding: 6px 8px;
-  min-height: 32px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  /* 外观交给公共 ui-select，页面只负责布局，防止类型控件与弹窗再次分叉。 */
+  width: 100%;
 }
 
 .scope-summary {
@@ -625,56 +592,12 @@ section.group {
   display: none;
 }
 
-/* 预览打开时改三栏；窄屏退化为抽屉 / Tab */
-.app.with-preview {
-  grid-template-columns: 180px minmax(0, 1fr) minmax(360px, 460px);
-  gap: 20px;
-}
-
-@media (max-width: 1280px) {
-  .app.with-preview {
-    grid-template-columns: 180px minmax(0, 1fr);
-  }
-
-  .preview-pane {
-    position: fixed;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    width: min(480px, 92vw);
-    z-index: 40;
-    padding: 14px;
-    max-height: none;
-    border-radius: 0;
-    background: var(--bg);
-    border-left: 1px solid var(--line);
-    box-shadow: var(--sh-3);
-  }
-}
-
-@media (max-width: 960px) {
-  .app.with-preview {
-    grid-template-columns: 1fr;
-  }
-
-  .app.with-preview .nav,
-  .app.with-preview .fill-body {
-    display: none;
-  }
-
-  .preview-pane {
-    position: static;
-    width: auto;
-    padding: 0;
-    max-height: none;
-    box-shadow: none;
-    border: none;
-  }
-}
-
-.preview-pane[hidden] {
-  display: none;
-}
+/* 筛选项使用固定槽位与语义色，激活时仅改变底色，不改变字体和布局。 */
+#filterSeg button { width: 60px; padding: 0; border: 1px solid transparent; --filter-color: var(--ink); --filter-soft: var(--card); --filter-line: var(--line); color: var(--filter-color); }
+#filterSeg [data-f="todo"] { --filter-color: var(--blue); --filter-soft: var(--blue-soft); --filter-line: var(--blue-line); }
+#filterSeg [data-f="low"], #filterSeg [data-f="missing"] { --filter-color: var(--amber); --filter-soft: var(--amber-soft); --filter-line: var(--amber-line); }
+#filterSeg button:hover, #filterSeg button.on { color: var(--filter-color); background: var(--filter-soft); border-color: var(--filter-line); box-shadow: none; }
+#filterSeg button:focus-visible { outline: 2px solid var(--filter-color); outline-offset: 2px; }
 
 /* 自定义字段：与 AI 抽取字段视觉区分，不显示置信度/原文证据 */
 .field.custom::before {

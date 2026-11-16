@@ -52,7 +52,7 @@ export default {
     <template v-else>
       <textarea v-if="inputKind === 'long_text'" data-input :rows="item.key === 'procurement_target' ? 4 : 3"
         :value="value" @input="change($event.target.value)"></textarea>
-      <select v-else-if="inputKind === 'select' && custom.options?.length" data-input :value="value"
+      <select v-else-if="inputKind === 'select' && custom.options?.length" class="ui-select" data-input :value="value"
         @change="change($event.target.value)">
         <option value="">请选择</option>
         <option v-for="option in custom.options" :key="option" :value="option">{{ option }}</option>

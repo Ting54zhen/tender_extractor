@@ -11,8 +11,8 @@ export default {
   <dialog id="dlgCustom">
     <div class="dlg-body">
       <h3 id="cfTitle">{{ customForm.key ? '编辑自定义字段' : '添加自定义字段' }}</h3><label>字段名（必填）</label><input id="cfLabel"
-        maxlength="60" v-model="customForm.label"><label>字段值</label><textarea id="cfValue" rows="3"
-        v-model="customForm.value"></textarea><label>类型</label><select id="cfType" v-model="customForm.type">
+        type="text" maxlength="60" v-model="customForm.label"><label>字段值</label><textarea id="cfValue" rows="3"
+        v-model="customForm.value"></textarea><label>类型</label><select id="cfType" class="ui-select" v-model="customForm.type">
         <option value="text">单行文本</option>
         <option value="long_text">多行文本</option>
         <option value="money">金额</option>
@@ -23,7 +23,7 @@ export default {
             v-model="customForm.target">追加到文末「补充条款」表格</label><label><input type="radio" name="cfTarget"
             value="placeholder" v-model="customForm.target">写入模板已有占位符</label></div>
       <div class="cf-row" id="cfPlaceholderRow" :hidden="customForm.target !== 'placeholder'">
-        <label>选择占位符</label><select id="cfPlaceholder" v-model="customForm.placeholder">
+        <label>选择占位符</label><select id="cfPlaceholder" class="ui-select" v-model="customForm.placeholder">
           <option value="">请选择占位符</option>
           <option v-for="name in placeholderOptions" :key="name" :value="name">{{ name }}</option>
         </select>

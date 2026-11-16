@@ -2,16 +2,17 @@
 import AppShell from '../../components/layout/AppShell.vue';
 import { usePage } from './use_templates_page.js';
 import DocumentPreview from '../../components/preview/DocumentPreview.vue';
+import PreviewDialog from '../../components/preview/PreviewDialog.vue';
 
 // 仅组合本页状态与显式组件；所有模板在构建时编译，不编译接口或文档文本。
-export default { components: { AppShell, DocumentPreview }, setup: usePage };
+export default { components: { AppShell, DocumentPreview, PreviewDialog }, setup: usePage };
 </script>
 
 <template>
   <div class="shell">
     <AppShell></AppShell>
     <main class="main">
-      <div class="main-inner wide">
+      <div class="main-inner templates-page">
         <div class="page-head">
           <h1>模板库</h1>
           <p>一套模板对应一种采购品目与采购方式的成稿版式；内置模板只读，自有模板可上传</p>
@@ -27,12 +28,8 @@ export default { components: { AppShell, DocumentPreview }, setup: usePage };
           <div class="empty" v-if="!templates.length">还没有模板。点右上角「上传模板」添加一套 .docx 招标文件范本。</div>
           <article v-for="template in templates" :key="template.id" class="card tpl-card">
             <h3>{{ template.name }}</h3>
-            <div class="badges"><span class="tag" :class="template.builtin ? 'work' : 'ok'">{{ template.builtin ? '内置 ·只读' : '自有模板' }}</span><span class="tag ok" v-if="template.is_default">默认</span></div>
-            <div class="tpl-meta">{{ category[template.category] || template.category || '—' }} · {{
-              method[template.method] || template.method || '—' }} · v{{ template.version || '1.0' }}<br>
-              占位符 {{ template.placeholder_count ?? (template.placeholders || []).length }} 个 · <b
-                v-if="template.unmapped?.length">未匹配 {{ template.unmapped.length }} 个</b><template
-                v-else>全部已匹配</template>
+            <div class="badges"><span class="tag" :class="template.builtin ? 't-info' : 't-ok'">{{ template.builtin ?'内置 ·只读' : '自有模板' }}</span><span class="tag t-ok" v-if="template.is_default">默认</span></div>
+            <div class="tpl-meta">{{ category[template.category] || template.category || '—' }} · {{ method[template.method] || template.method || '—' }} · v{{ template.version || '1.0' }}<br>占位符 {{ template.placeholder_count ?? (template.placeholders || []).length }} 个 · <b class="template-unmatched" v-if="template.unmapped?.length">未匹配 {{ template.unmapped.length }}个</b><span class="template-matched" v-else>全部已匹配</span>
               <b v-if="template.missing_fields?.length"> · 缺 {{ template.missing_fields.length }} 个字段位</b><br><span
                 class="dim">{{
                   String(template.created_at || '').slice(0, 10) }}</span>
@@ -79,7 +76,7 @@ export default { components: { AppShell, DocumentPreview }, setup: usePage };
     <div class="dlg-body">
       <h3 id="cfTitle">删除模板</h3>
       <p id="cfText" style="font-size:13px;color:var(--muted);line-height:1.7">确定删除「{{ deleting?.name
-        }}」吗？已生成的招标文件不受影响；如果它是默认模板，会自动回退到内置模板。</p>
+      }}」吗？已生成的招标文件不受影响；如果它是默认模板，会自动回退到内置模板。</p>
       <div class="dlg-foot"><button class="btn" @click="dialog('dlgConfirm', false)">取消</button><button
           class="btn primary" id="cfOk" :disabled="busy" @click="remove">确认</button></div>
     </div>
@@ -90,7 +87,7 @@ export default { components: { AppShell, DocumentPreview }, setup: usePage };
       <p style="font-size:12.5px;color:var(--muted);line-height:1.7">标为「未匹配」的占位符，可到填写工作台通过「＋ 自定义字段」绑定。</p>
       <div class="ph-list" id="dtList">
         <div class="row" v-for="name in selected?.placeholders || []" :key="name"><code>{{ '{' + name + '}' }}</code>
-          <div class="spacer"></div><span class="tag" :class="selected.unmapped.includes(name) ? 'low' : 'ok'">{{
+          <div class="spacer"></div><span class="tag" :class="selected.unmapped.includes(name) ? 't-low' : 't-ok'">{{
             selected.unmapped.includes(name) ? '未匹配字段' : '已匹配' }}</span>
         </div>
         <div class="empty" v-if="!selected?.placeholders?.length">这套模板没有解析到占位符。</div>
@@ -98,18 +95,15 @@ export default { components: { AppShell, DocumentPreview }, setup: usePage };
       <div class="dlg-foot"><button class="btn" @click="dialog('dlgDetail', false)">关闭</button></div>
     </div>
   </dialog>
-  <dialog id="dlgPreview" class="dlg-preview" @close="invalidatePreview">
-    <div class="dlg-body">
-      <h3 id="pvTitle">预览 · {{ previewName }}</h3>
-      <div class="preview-scroll" id="pvBody">
-        <div class="paper" id="pvPaper">
-          <p class="pv-body" v-if="previewMessage">{{ previewMessage }}</p>
-          <DocumentPreview v-else :sections="previewSections"></DocumentPreview>
-        </div>
+  <PreviewDialog id="dlgPreview" :title="'预览 · ' + previewName" @close="invalidatePreview">
+    <div class="preview-scroll" id="pvBody">
+      <div class="paper" id="pvPaper">
+        <p class="pv-body" v-if="previewMessage">{{ previewMessage }}</p>
+        <DocumentPreview v-else :sections="previewSections"></DocumentPreview>
       </div>
-      <p class="pv-hint">预览为结构近似，字体与分页以生成的 .docx 为准；黄色标记为占位符。</p>
-      <div class="dlg-foot"><button class="btn" @click="dialog('dlgPreview', false)">关闭</button></div>
     </div>
-  </dialog>
+    <template #hint>预览为结构近似，字体与分页以生成的 .docx 为准；黄色标记为占位符。</template>
+    <template #footer><button class="btn" @click="dialog('dlgPreview', false)">关闭</button></template>
+  </PreviewDialog>
 
 </template>

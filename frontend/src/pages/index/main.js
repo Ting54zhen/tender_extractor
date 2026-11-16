@@ -2,6 +2,7 @@ import { createApp } from 'vue';
 import Page from './IndexPage.vue';
 import '../../styles/app.css';
 import '../../styles/base.css';
+import '../../styles/preview.css';
 import '../../styles/projects.css';
 import '../../styles/pages/requirements.css';
 

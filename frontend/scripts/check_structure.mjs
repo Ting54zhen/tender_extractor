@@ -39,6 +39,8 @@ for (const page of pages) {
   const html = fs.readFileSync(path.join(dist, page + '.html'), 'utf8');
   assert.ok(html.includes('id="vue-root"'), page + ' 缺少挂载点');
   assert.match(html, /<script\b[^>]*type="module"/);
+  // 七入口必须在样式与 Vue 启动前恢复主题，避免只有首页记住深色或切页闪白。
+  assert.ok(html.indexOf('/assets/theme-init.js') >= 0 && html.indexOf('/assets/theme-init.js') < html.indexOf('type="module"'), page + ' 缺少前置本机主题脚本');
   for (const match of html.matchAll(/\b(?:src|href)="([^"]+)"/g)) inspect(match[1]);
 }
 assert.match(fs.readFileSync(path.join(dist, 'assets/VUE-LICENSE.txt'), 'utf8'), /MIT License/);

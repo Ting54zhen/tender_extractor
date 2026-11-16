@@ -1,15 +1,23 @@
 <script setup>
-import { ref, watch } from 'vue';
+import { ref, watch, onBeforeUnmount } from 'vue';
 
 // 需求与项目复用同一确认样式；原生 dialog 保留焦点约束与 Escape 键语义。
 const props = defineProps({ open: Boolean, title: String, message: String, busy: Boolean, error: String });
 const emit = defineEmits(['cancel', 'confirm']);
 const element = ref(null);
+// Chromium 会从 CSS 视口单位与 fixed 包含块中扣除预留滚动条槽。
+// 使用窗口实际宽度确定横向中点，保持原有「整窗居中」语义；仅弹窗打开时监听缩放。
+function centerInWindow() {
+  if (element.value && props.open) element.value.style.left = window.innerWidth / 2 + 'px';
+}
 watch([() => props.open, element], ([open]) => {
   if (!element.value) return;
+  window.removeEventListener('resize', centerInWindow);
+  if (open) { centerInWindow(); window.addEventListener('resize', centerInWindow); }
   if (open && !element.value.open) element.value.showModal();
   if (!open && element.value.open) element.value.close();
 }, { flush: 'post' });
+onBeforeUnmount(() => window.removeEventListener('resize', centerInWindow));
 function cancel(event) {
   // 提交期间保持弹窗，失败原因仍在原位置展示，避免重复删除或丢失错误。
   event?.preventDefault();
@@ -33,8 +41,9 @@ function cancel(event) {
 </template>
 
 <style scoped>
-/* 明确以视口居中，和页面滚动位置、侧栏宽度无关；窄屏保留边距。 */
-.delete-dialog { position: fixed; inset: 0; margin: auto; width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow-y: auto; border: 1px solid var(--line); }
+/* 明确以完整视口居中，和页面滚动位置、侧栏宽度无关；窄屏保留边距。
+   横向位置由上方窗口尺寸计算覆盖，避免 auto 外边距把预留滚动条槽计入偏移。 */
+.delete-dialog { position: fixed; inset: 50% auto auto 50%; margin: 0; transform: translate(-50%, -50%); width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow-y: auto; border: 1px solid var(--line); }
 .delete-dialog-body { padding: 28px; }
 .delete-dialog-icon { width: 44px; height: 44px; display: grid; place-items: center; color: var(--red); background: var(--red-soft); border-radius: 12px; margin-bottom: 18px; }
 .delete-dialog-icon svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }

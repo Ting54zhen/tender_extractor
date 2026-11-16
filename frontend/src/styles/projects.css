@@ -19,7 +19,7 @@
   border: 1px solid var(--line);
   border-radius: var(--r);
   padding: 14px 16px;
-  background: #fff;
+  background: var(--card);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -28,14 +28,14 @@
 }
 
 .pcard:hover {
-  border-color: #c9c9c2;
+  border-color: var(--hover-line);
   background: var(--surface-2);
 }
 
 .pcard:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--ring);
-  border-color: #b7b7b0;
+  border-color: var(--hover-line);
 }
 
 .pcard .name {

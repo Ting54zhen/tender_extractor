@@ -11,13 +11,19 @@ export default { components: { AppShell }, setup: usePage };
     <AppShell></AppShell>
     <main class="main">
       <div class="main-inner">
-        <div class="page-top"><span class="badge" :class="health.available ? 'ok' : 'bad'" id="health-badge"
-            :title="health.reason || ''"><span class="dot"></span><span id="health-text">{{ health.available ? '模型就绪 · '
-              + (health.model || '') : '模型不可用' }}</span></span><button class="btn small" id="refresh-health"
-            @click="loadHealth">重新检测</button></div>
-        <div class="page-head">
-          <h1>双文档符合性比对</h1>
-          <p>招标要求 vs 投标响应 · 逐条判定 · 证据回链</p>
+        <!-- 模型状态放在标题右侧，保留检测行为并与其他页面保持同一标题起点。 -->
+        <div class="page-head with-actions">
+          <div class="page-head-main">
+            <h1>双文档符合性比对</h1>
+            <p>招标要求 vs 投标响应 · 逐条判定 · 证据回链</p>
+          </div>
+          <div class="page-head-actions">
+            <span class="badge" :class="health.available ? 'ok' : 'bad'" id="health-badge":title="health.reason || ''">
+              <span class="dot"></span>
+              <span id="health-text">{{ health.available ? '模型就绪 · ' + (health.model || '') : '模型不可用' }}</span>
+            </span>
+            <button class="btn small health-refresh" id="refresh-health" @click="loadHealth">重新检测</button>
+          </div>
         </div>
         <section class="card">
           <div class="grid2">

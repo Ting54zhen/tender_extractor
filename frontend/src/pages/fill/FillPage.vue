@@ -5,23 +5,25 @@ import FillPreviewPane from '../../components/preview/FillPreviewPane.vue';
 import TemplatePickerDialog from '../../components/templates/TemplatePickerDialog.vue';
 import CustomFieldDialog from '../../components/fields/CustomFieldDialog.vue';
 import FieldEditor from '../../components/fields/FieldEditor.vue';
+import UiSelect from '../../components/fields/UiSelect.vue';
 
 // 仅组合本页状态与显式组件；所有模板在构建时编译，不编译接口或文档文本。
-export default { components: { AppShell, FieldEditor, FillPreviewPane, TemplatePickerDialog, CustomFieldDialog }, setup: usePage };
+export default { components: { AppShell, FieldEditor, UiSelect, FillPreviewPane, TemplatePickerDialog, CustomFieldDialog }, setup: usePage };
 </script>
 
 <template>
   <div class="shell">
     <AppShell></AppShell>
     <main class="main">
-      <div class="main-inner wide">
-        <div class="fill-head">
-          <div class="fill-head-main">
+      <div class="main-inner">
+        <!-- 标题与操作复用全站页头，避免填写工作台另设字号和顶部偏移。 -->
+        <div class="page-head with-actions">
+          <div class="page-head-main">
             <h1>填写工作台</h1>
             <p id="fileInfo">{{ jobInfo ? jobInfo.filename + ' · 状态：' + (jobInfo.stage || jobInfo.status) : '正在加载任务…' }}
             </p>
           </div>
-          <div class="fill-head-actions"><button class="btn ghost" id="btnAcceptAll" :disabled="!ready"
+          <div class="page-head-actions"><button class="btn ghost" id="btnAcceptAll" :disabled="!ready"
               @click="acceptAll">全部采纳 AI 值</button><button class="btn" id="btnPreview" :disabled="!ready"
               @click="previewOpen = !previewOpen">{{ previewOpen ? '关闭预览' : '预览' }}</button><button class="btn primary"
               id="btnGenerate" :disabled="!ready || generating" @click="generate">{{ generating ? '生成中…' : '生成招标文件'
@@ -33,12 +35,8 @@ export default { components: { AppShell, FieldEditor, FillPreviewPane, TemplateP
           </div>
         </div>
         <div class="scope-bar" id="scopeBar">
-          <div class="scope-item" v-for="axis in axes" :key="axis.key"><label :for="axis.id">{{ axis.label
-              }}</label><select :id="axis.id" v-model="scopeState[axis.key]" :disabled="loading" @change="changeScope">
-              <option value="">请选择</option>
-              <option v-for="option in scopeAxes[axis.key] || []" :key="option.code" :value="option.code">{{
-                option.label }}</option>
-            </select></div>
+          <div class="scope-item" v-for="axis in axes" :key="axis.key"><label :for="axis.id + '-trigger'">{{ axis.label }}</label>
+            <UiSelect :id="axis.id" :label="axis.label" :options="scopeAxes[axis.key] || []" v-model="scopeState[axis.key]" :disabled="loading" @change="changeScope" /></div>
           <div class="scope-summary" id="scopeSummary">{{ scopeSummary }}</div>
           <div class="scope-actions" id="scopeActions"><button
               v-if="scopeData?.template_hint?.matched && scopeData.template_hint.id !== templateId" class="btn small"
@@ -56,7 +54,7 @@ export default { components: { AppShell, FieldEditor, FillPreviewPane, TemplateP
         <div id="notice" class="notice" :class="notice.kind" v-show="notice.text">{{ notice.text }}</div>
         <div id="loading" class="notice" :class="{ hidden: !loading && !scopeLoading }">{{ scopeLoading ? '正在按类型加载字段…' :
           '正在加载抽取结果…' }}</div>
-        <div id="app" class="app" :class="{ 'with-preview': previewOpen, hidden: !ready }">
+        <div id="app" class="app" :class="{ hidden: !ready }">
           <aside class="nav" id="nav">
             <h2>字段分组</h2><a v-for="group in groups" :key="group.key" class="nav-item"
               :class="{ active: group.key === activeGroup }" :href="'#g-' + group.key" :data-g="group.key"
@@ -67,11 +65,11 @@ export default { components: { AppShell, FieldEditor, FillPreviewPane, TemplateP
           <div class="fill-body">
             <div class="toolbar">
               <div class="seg" id="filterSeg"><button v-for="option in filters" :key="option[0]" :data-f="option[0]"
-                  :class="{ on: filter === option[0] }" @click="filter = option[0]">{{ option[1] }}</button></div>
+                  :aria-pressed="filter === option[0]" :class="{ on: filter === option[0] }" @click="filter = option[0]">{{ option[1] }}</button></div>
               <div class="spacer"></div><button class="btn small" id="btnAddCustom" @click="openCustom('')">＋
                 自定义字段</button><button class="btn small" id="btnSuggest" :disabled="suggesting" @click="suggest">{{
                   suggesting ? '起草中…' : 'AI 起草缺失字段' }}</button><label class="chip">缺失字段<select id="missingMode"
-                  v-model="missingMode">
+                  class="ui-select" v-model="missingMode">
                   <option value="mark">标记「待补充」</option>
                   <option value="empty">留空</option>
                 </select></label>
@@ -95,14 +93,15 @@ export default { components: { AppShell, FieldEditor, FillPreviewPane, TemplateP
                   @click="selectGroup(nextGroup.key)">{{ nextGroup.label }} →</button><span v-else></span></div>
             </div>
           </div>
-          <FillPreviewPane :preview-open="previewOpen" :preview="preview" :preview-loading="previewLoading"
-            :preview-error="previewError" :preview-sections="previewSections" v-model:only-missing="onlyMissing"
-            :generating="generating" :ready="ready" @close="previewOpen = false" @locate="locateField"
-            @refresh="refreshPreview" @generate="generate" />
         </div>
       </div>
     </main>
   </div>
+  <!-- 预览与模板库使用同一居中弹窗，离开主网格，打开时不再挤压字段区。 -->
+  <FillPreviewPane :preview-open="previewOpen" :preview="preview" :preview-loading="previewLoading"
+    :preview-error="previewError" :preview-sections="previewSections" v-model:only-missing="onlyMissing"
+    :generating="generating" :ready="ready" @close="previewOpen = false" @locate="previewOpen = false; locateField($event)"
+    @refresh="refreshPreview" @generate="generate" />
   <TemplatePickerDialog :templates="templates" :template-id="templateId" :scope-loading="scopeLoading"
     @pick="pickTemplate" @close="dialog('dlgTemplate', false)" />
   <CustomFieldDialog :custom-form="customForm" :placeholder-options="placeholderOptions" @save="saveCustom"

@@ -1,3 +1,5 @@
+import { numberedText } from './detail_text.js';
+
 /* 审核报告与图谱沿用已有展示格式；先转义全部外部文本，再生成受限 HTML/SVG。
  * 页面只可把这里返回的内容交给 v-html，接口原文直接使用 Vue 文本插值。
  */
@@ -16,8 +18,8 @@ function renderGraphSvg(g) {
     ["DisqualificationClause", "废标条款"],
   ];
   var COLORS = {
-    Project: "#2563eb", ProcurementItem: "#059669", Qualification: "#b45309",
-    ScoringCriterion: "#7c3aed", DisqualificationClause: "#dc2626",
+    Project: "var(--blue)", ProcurementItem: "var(--green)", Qualification: "var(--amber)",
+    ScoringCriterion: "var(--blue)", DisqualificationClause: "var(--red)",
   };
   var columns = {};
   var order = [];
@@ -46,35 +48,36 @@ function renderGraphSvg(g) {
     return String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;")
       .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
-  var svg = '<svg width="' + width + '" height="' + height + '" style="font:12px sans-serif">';
+  // viewBox 保留图谱坐标，同时允许容器等比缩小；默认无需横向滚动才能看全。
+  var svg = '<svg viewBox="0 0 ' + width + ' ' + height + '" width="' + width + '" height="' + height + '" role="img" aria-label="采购知识图谱" style="font:12px sans-serif">';
   (g.edges || []).forEach(function (e) {
     var s = pos[e.source], t = pos[e.target];
     if (!s || !t) return;
     var x1 = s.x + 190, y1 = s.y + NODE_H / 2, x2 = t.x, y2 = t.y + NODE_H / 2;
     svg += '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 +
-      '" stroke="#cbd5e1" stroke-width="1.2"><title>' + esc2(e.predicate) + "</title></line>";
+      '" stroke="var(--line)" stroke-width="1.2"><title>' + esc2(e.predicate) + "</title></line>";
   });
   order.forEach(function (type, ci) {
     var list = columns[type].slice(0, MAX_PER_COL);
     var head = (COLUMN_ORDER.find(function (c) { return c[0] === type; }) || [type, type])[1];
-    svg += '<text x="' + (20 + ci * COL_W) + '" y="24" fill="#6b7280" font-weight="600">' +
+    svg += '<text x="' + (20 + ci * COL_W) + '" y="24" fill="var(--muted)" font-weight="600">' +
       esc2(head) + "（" + columns[type].length + "）</text>";
     list.forEach(function (n) {
       var p = pos[n.id];
-      var color = COLORS[type] || "#6b7280";
+      var color = COLORS[type] || "var(--muted)";
       svg += '<rect x="' + p.x + '" y="' + p.y + '" width="190" height="' + NODE_H +
-        '" rx="9" fill="#fff" stroke="' + color + '" stroke-width="1.4">' +
+        '" rx="9" fill="var(--card)" stroke="' + color + '" stroke-width="1.4">' +
         "<title>" + esc2(n.label) + "</title></rect>";
       var label = n.label.length > 16 ? n.label.slice(0, 15) + "…" : n.label;
-      svg += '<text x="' + (p.x + 10) + '" y="' + (p.y + 20) + '" fill="#111827">' + esc2(label) + "</text>";
+      svg += '<text x="' + (p.x + 10) + '" y="' + (p.y + 20) + '" fill="var(--ink)">' + esc2(label) + "</text>";
       if (n.properties && n.properties.value) {
         var v = String(n.properties.value).slice(0, 12);
-        svg += '<text x="' + (p.x + 10) + '" y="' + (p.y + 35) + '" fill="#9ca3af">' + esc2(v) + "</text>";
+        svg += '<text x="' + (p.x + 10) + '" y="' + (p.y + 35) + '" fill="var(--faint)">' + esc2(v) + "</text>";
       }
     });
     if (columns[type].length > MAX_PER_COL) {
       svg += '<text x="' + (20 + ci * COL_W) + '" y="' + (40 + MAX_PER_COL * (NODE_H + GAP)) +
-        '" fill="#9ca3af">… 另有 ' + (columns[type].length - MAX_PER_COL) + " 个</text>";
+        '" fill="var(--faint)">… 另有 ' + (columns[type].length - MAX_PER_COL) + " 个</text>";
     }
   });
   svg += "</svg>";
@@ -83,13 +86,14 @@ function renderGraphSvg(g) {
 
 
 function inline(text) {
-  return esc(text)
+  // 在单元格或段落内部插入安全换行，不能先切整篇 Markdown，避免破坏表格行结构。
+  return esc(numberedText(text)).replace(/\n/g, '<br>')
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
 }
 
 function mdToHtml(md) {
-  var lines = String(md || "").replace(/\r\n/g, "\n").split("\n");
+  var lines = String(md || '').replace(/\r\n/g, "\n").split("\n");
   var out = [], list = null, table = [];
 
   function closeList() { if (list) { out.push("</" + list + ">"); list = null; } }
@@ -143,4 +147,4 @@ function mdToHtml(md) {
 }
 
 
-export const formatters = { markdown: mdToHtml, graph: renderGraphSvg };
+export const formatters = { markdown: mdToHtml, graph: renderGraphSvg, text: numberedText };

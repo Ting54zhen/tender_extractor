@@ -5,6 +5,79 @@
 
 /* 删除入口为淡红色，确认操作使用实心红色；独立类避免改变已有 danger 按钮。 */
 .btn.delete-soft { color: var(--red); background: var(--red-soft); border-color: var(--red); }
-.btn.delete-soft:hover { background: #f8e3df; border-color: var(--red); }
-.btn.delete-solid { color: #fff; background: var(--red); border-color: var(--red); }
-.btn.delete-solid:hover { color: #fff; background: #972e23; border-color: #972e23; }
+.btn.delete-soft:hover { background: var(--danger-soft-hover); border-color: var(--red); }
+.btn.delete-solid { color: #fff; background: var(--danger-solid); border-color: var(--danger-solid); }
+.btn.delete-solid:hover { color: #fff; background: var(--danger-hover); border-color: var(--danger-hover); }
+
+/* 可复用表单外观只通过显式类启用，避免改变上传、复选框等特殊控件。
+   继续使用原生 select 保留键盘选择和屏幕阅读器支持，箭头用本机 CSS 绘制。 */
+input.ui-input,
+select.ui-select {
+    min-width: 0;
+    max-width: 100%;
+    min-height: 36px;
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background-color: var(--card);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    transition: border-color .14s, box-shadow .14s;
+}
+
+select.ui-select {
+    appearance: none;
+    padding-right: 34px;
+    cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: right 17px center, right 12px center;
+    background-size: 5px 5px;
+    background-repeat: no-repeat;
+}
+
+input.ui-input:hover:not(:disabled):not(:focus),
+select.ui-select:hover:not(:disabled):not(:focus) { border-color: var(--faint); }
+
+/* 蓝色仅用于当前可编辑焦点；固定边框宽度，聚焦时不引起布局偏移。 */
+input.ui-input:focus,
+select.ui-select:focus {
+    outline: none;
+    border-color: var(--blue);
+    box-shadow: 0 0 0 3px var(--blue-line);
+}
+
+input.ui-input:disabled,
+select.ui-select:disabled {
+    color: var(--muted);
+    background-color: var(--surface);
+    cursor: not-allowed;
+    opacity: 1;
+}
+
+/* 工具栏的紧凑控件由外层提供边框与焦点环，避免出现双层输入框。 */
+.chip:has(select.ui-select) { min-height: 36px; height: auto; padding-right: 0; }
+.chip select.ui-select { min-height: 34px; border: 0; border-radius: 0 8px 8px 0; padding: 6px 32px 6px 6px; }
+.chip:has(select.ui-select):focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-line); }
+.chip select.ui-select:focus { box-shadow: none; }
+
+@media (prefers-reduced-motion: reduce) {
+    input.ui-input, select.ui-select { transition: none; }
+}
+
+/* 采购类型下拉菜单沿用白底、细边框与浮层阴影；仅选中项用蓝色，不扩展全站配色。 */
+.ui-select-field { position: relative; min-width: 150px; }
+.ui-select-trigger { display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; min-height: 36px; padding: 7px 12px; font: inherit; font-size: 13px; line-height: 1.5; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: var(--r-sm); text-align: left; cursor: pointer; }
+.ui-select-trigger .placeholder { color: var(--muted); }
+/* 展开与键盘焦点优先保留蓝色；排除这两种状态，避免 hover 的更高优先级覆盖提示。 */
+.ui-select-trigger:hover:not(:disabled):not([aria-expanded="true"]):not(:focus-visible) { border-color: var(--faint); }
+.ui-select-trigger:focus-visible, .ui-select-trigger[aria-expanded="true"] { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-line); }
+.ui-select-trigger:disabled { color: var(--muted); background: var(--surface); cursor: not-allowed; }
+.ui-select-chevron { width: 6px; height: 6px; flex: none; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: translateY(-2px) rotate(45deg); }
+.ui-select-trigger[aria-expanded="true"] .ui-select-chevron { transform: translateY(2px) rotate(225deg); }
+.ui-select-options { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; min-width: 100%; max-height: 250px; overflow-y: auto; padding: 4px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--card); box-shadow: var(--sh-2); }
+.ui-select-options [role="option"] { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 9px; font-size: 13px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+.ui-select-options [role="option"][data-active="true"] { background: var(--surface); }
+.ui-select-options [role="option"][aria-selected="true"] { color: var(--blue); background: var(--blue-soft); }

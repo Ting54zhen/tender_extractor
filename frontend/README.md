@@ -31,6 +31,10 @@ frontend/
 
 共用 CSS 不改变既有类语义；页面样式放 `styles/pages/`，通过对应 main.js 引入。不增加 Router、Pinia、大型组件库或图标库；图标使用本地内联 SVG。文档、模型和接口内容只用文本插值或安全格式化，禁止编译为 Vue 模板。金额保持字符串交给后端 Decimal 处理。
 
+页面外框统一使用 `main-inner`：最大宽度 1180px（含左右留白），顶部留白 24px，左右留白随屏宽为 40 / 24 / 16px；整页始终预留滚动条空间。常规页面保留一个 `page-head` 内的 h1，桌面字号 32px、760px 以下为 26px；状态与操作使用 `page-head with-actions`、`page-head-main`、`page-head-actions`，窄屏自动换行。新建解析页省略顶部 h1 与说明段落，模型状态使用右对齐的 `page-top`，居中引导语和说明保留在正文；内部表单与输入区可另设阅读宽度，不改变页面外框。
+
+侧栏品牌旁的月亮 / 太阳按钮切换浅色与深色模式，窄屏导航栏同样可用；默认浅色，偏好以 `tender.theme` 保存在浏览器本机 `localStorage`，跨页面、刷新与其他标签页同步，不修改后端设置。七入口在样式和 Vue 前加载本机 `public/assets/theme-init.js` 恢复主题；存储不可用时仍允许本次切换并提示无法保存。主题颜色统一维护于 `app.css` 变量，卡片 / 表单 / 弹窗 / 图谱随主题变化；文档预览纸面保留白底黑字与浅色缺失高亮。模型「重新检测」按钮复用主按钮主题色，浅色模式黑底白字、深色模式浅底黑字，两种主题均无边框，悬停色与主按钮一致。
+
 ## 安装与运行
 
 开发机需要 Node.js `^20.19.0 || >=22.12.0`（推荐当前 LTS）和 npm。在项目根目录：
@@ -66,7 +70,7 @@ npm run check
 # frontend 内，先构建
 npm run build
 npm run check             # 7 个入口、递归 JS/CSS 引用与许可证
-npm run test:browser      # 本机夹具 + Chrome/Edge，19 项页面行为回归
+npm run test:browser      # 本机夹具 + Chrome/Edge，页面交互与跨页面布局回归
 # 根目录
 python -m pytest tests -q # 静态分发测试需要先完成上面的 build
 node scripts/check_browser.mjs
@@ -84,16 +88,16 @@ node scripts/check_browser.mjs
 
 前端依赖以下接口，路径与语义**保持稳定**；需要新接口时先在后端 `web.py` 实现，再更新本表：
 
-| 方法 | 路径                          | 说明                                                     |
-| ---- | ----------------------------- | -------------------------------------------------------- |
-| GET  | `/api/health`               | 服务与模型状态                                           |
-| POST | `/api/extract?filename=...` | 上传文件并创建抽取任务（body 为文件二进制）              |
-| GET  | `/api/jobs/{id}`            | 任务状态（queued/running/done/skipped/error，抽取任务含 stage 与 progress 整数百分比） |
-| DELETE | `/api/jobs/{id}` | 删除已结束的需求解析记录与该任务字段确认值；200 `{"deleted":"<id>"}`，不存在 404，排队 / 运行中 409，比对任务 400。保留所属项目、其他任务及已保存的本机文档；前端确认成功后返回需求列表。 |
-| GET  | `/api/jobs/{id}/result`     | 抽取结果（字段 + 证据 + 置信度）                         |
-| GET  | `/api/jobs/{id}/report`     | 审核报告（Markdown 渲染数据）                            |
-| POST | `/api/compare`              | 创建比对任务（multipart：`tender` + `bid` 两个文件） |
-| GET  | `/api/jobs/{id}/compare`    | 比对结果（要求/响应/判定）                               |
+| 方法   | 路径                          | 说明                                                                                                                                                                                        |
+| ------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/health`               | 服务与模型状态                                                                                                                                                                              |
+| POST   | `/api/extract?filename=...` | 上传文件并创建抽取任务（body 为文件二进制）                                                                                                                                                 |
+| GET    | `/api/jobs/{id}`            | 任务状态（queued/running/done/skipped/error，抽取任务含 stage 与 progress 整数百分比）                                                                                                      |
+| DELETE | `/api/jobs/{id}`            | 删除已结束的需求解析记录与该任务字段确认值；200 `{"deleted":"<id>"}`，不存在 404，排队 / 运行中 409，比对任务 400。保留所属项目、其他任务及已保存的本机文档；前端确认成功后返回需求列表。 |
+| GET    | `/api/jobs/{id}/result`     | 抽取结果（字段 + 证据 + 置信度）                                                                                                                                                            |
+| GET    | `/api/jobs/{id}/report`     | 审核报告（Markdown 渲染数据）                                                                                                                                                               |
+| POST   | `/api/compare`              | 创建比对任务（multipart：`tender` + `bid` 两个文件）                                                                                                                                    |
+| GET    | `/api/jobs/{id}/compare`    | 比对结果（要求/响应/判定）                                                                                                                                                                  |
 
 ### 模板库与预览（v0.2 新增）
 

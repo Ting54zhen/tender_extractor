@@ -19,7 +19,8 @@ export function usePage() {
     (filter.value === 'all' || (filter.value === 'running' ? ['queued', 'running'].includes(item.status) : filter.value === 'error' ? ['error', 'skipped'].includes(item.status) : item.status === filter.value)) &&
     (!search.value.trim() || (item.filename || '').toLowerCase().includes(search.value.trim().toLowerCase()))));
   const canSubmit = computed(() => !!file.value || !!text.value.trim());
-  const jobLabels = { done: ['已完成', 't-ok'], queued: ['排队中', 't-info'], running: ['解析中', 't-info'], error: ['解析失败', 't-bad'], skipped: ['已跳过', 't-warn'] };
+  // 与三类筛选共用蓝 / 绿 / 红语义；跳过保留原文案，归入未完成的红色组。
+  const jobLabels = { done: ['已完成', 't-ok'], queued: ['排队中', 't-info'], running: ['解析中', 't-info'], error: ['解析失败', 't-bad'], skipped: ['已跳过', 't-bad'] };
   let listTimer, disposed = false;
   const file = ref(null), dragging = ref(false), mode = ref("full"), force = ref(false), projectId = ref(""), projects = ref([]);
   const inputElement = ref(null);
@@ -60,7 +61,7 @@ export function usePage() {
   const suggestionTabs = [["common", "常用"], ["build", "生成"], ["check", "核对"], ["keep", "归档"]];
   const suggestionList = computed(() => ({ common: ["抽取结构化字段并附原文证据", "查看缺失项与待人工确认的字段", "生成可编辑的招标文件 .docx", "核对投标响应与资格要求的差距", "按项目归档多轮解析结果", "导出 JSON、审核报告与平台草稿"], build: ["把标的清单填进招标文件表格", "逐条标注 ★ ▲ 实质性条款", "补齐商务要求与编制规范默认值", "导出 PDF 与平台草稿"], check: ["比对招标要求与投标响应", "标记不满足与部分满足的条目", "检查模板占位符覆盖情况", "复核低置信与推断字段"], keep: ["按采购项目归档任务", "恢复已归档项目继续编辑", "在企业档案里复用资质与业绩"] })[suggestionTab.value]);
   const panes = [["fields", "字段"], ["review", "待复核"], ["template", "模板映射"], ["report", "审核报告"]];
-  const statusLabels = { ok: ["正常", "t-ok"], low_confidence: ["低置信", "t-low"], inferred: ["推断", "t-info"], missing: ["缺失", "t-mute"], invalid: ["无效", "t-bad"], conflict: ["冲突", "t-bad"] };
+  const statusLabels = { ok: ["正常", "t-ok"], low_confidence: ["低置信", "t-low"], inferred: ["推断", "t-info"], missing: ["缺失", "t-low"], invalid: ["无效", "t-bad"], conflict: ["冲突", "t-bad"] };
   const sourceLabels = { label: "标签", table: "表格", regex: "正则", computed: "计算", inferred: "推断", llm: "模型", "rule+llm": "规则+模型", none: "无" };
   const priorityLabels = { high: ["高", "t-bad"], medium: ["中", "t-warn"], low: ["低", "t-ok"] };
   const reviewItems = computed(() => [...(result.value?.review || [])].sort((a, b) => (({ high: 0, medium: 1, low: 2 })[a.priority] ?? 9) - (({ high: 0, medium: 1, low: 2 })[b.priority] ?? 9)));

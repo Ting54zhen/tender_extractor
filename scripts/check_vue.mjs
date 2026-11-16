@@ -26,6 +26,12 @@ function extractionSnapshot(id = 'job-one') {
 let templates = [{ id: 'builtin-service', name: '某服务类模板', builtin: true, is_default: true, category: 'service', method: 'open', placeholders: ['项目名称', '采购预算', '采购标的', '未知位置'], unmapped: ['未知位置'], placeholder_count: 4 }];
 let projects = [{ id: 'project-one', name: '某采购项目', note: '脱敏回归', status: 'active', job_count: 1 }];
 const result = { fields: { project_name: { key: 'project_name', label: '项目名称', template: '项目名称', value: '<img src=x onerror="window.__injected=1">', status: 'ok', confidence: 0.9, source: 'rule', evidence: [{ block_id: 'p1', quote: '<script>window.__injected=2</script>', section: '一、采购需求' }] } }, review: [], template_values: { '项目名称': '某项目' }, missing_templates: [] };
+// 编号段落仅是脱敏展示夹具，覆盖字段、证据、复核、模板映射和报告全部长文本入口。
+const numberedFixture = '1、提交资料；2、安排验收；3、完成培训，预算123456.78元。';
+result.fields.delivery = { key: 'delivery', label: '履约要求', value: numberedFixture, status: 'ok', notes: numberedFixture, evidence: [{ block_id: 'p2', quote: numberedFixture }] };
+result.fields.missing_value = { key: 'missing_value', label: '未载明字段', value: null, status: 'missing', evidence: [] };
+result.review.push({ key: 'delivery', label: '履约复核', priority: 'medium', issue: numberedFixture, value: numberedFixture });
+result.template_values['履约要求'] = numberedFixture;
 const extractJob = { id: 'job-one', kind: 'extract', filename: '脱敏报告.docx', status: 'done', stage: '完成', elapsed: 1.2, summary: { fields_with_value: 3, templates_filled: 3, templates_total: 4 }, downloads: { json: '/api/jobs/job-one/download/json', md: '/api/jobs/job-one/download/md', draft: '' } };
 const compareJob = { id: 'compare-one', kind: 'compare', status: 'done', stage: '完成', elapsed: 1, summary: { requirements: 1, responses: 1, satisfied: 1 } };
 const settings = { llm: { enabled: true, provider: 'ollama', base_url: 'http://127.0.0.1:11434', model: 'local-model' }, review: { enabled: false, provider: 'ollama' }, extraction: { min_confidence: 0.6, require_tender_document: true }, output: { dir: '' } };
@@ -90,7 +96,7 @@ async function handle(req, res) {
     if (!action) return id === 'missing-job' || deletedJobs.has(id) ? json({ error: '任务不存在' }, 404) : json(id.startsWith('compare') ? compareJob : extractionSnapshot(id));
     if (action === 'fields') return json(fields(url.searchParams));
     if (action === 'result') return json(result);
-    if (action === 'report') return json({ markdown: '# 某报告\n\n<script>window.__injected=4</script>\n\n证据需要人工复核。' });
+    if (action === 'report') return json({ markdown: '# 某报告\n\n<script>window.__injected=4</script>\n\n证据需要人工复核。' + numberedFixture });
     if (action === 'compare') return json({ results: [{ requirement: '某资格要求', req_evidence: '招标原文', verdict: 'satisfied', matched_response: '某响应', resp_evidence: '投标原文', note: '请人工确认' }], report: '某比对报告' });
     if (action === 'suggest') return json({ suggestions: { contract_period: { value: '人工确认后采用', reason: '测试建议', source: 'llm_suggest' } }, count: 1 });
     if (action === 'preview') {
@@ -103,7 +109,7 @@ async function handle(req, res) {
     if (action === 'download') return binary('审核报告.json');
     if (action === 'export') return binary('某招标文件.pdf');
     if (action === 'bid') return json({ summary: { covered: 1, qualifications: 1, sections: 1, gaps: 0 }, gaps: [], markdown: '# 投标书初稿' });
-    if (action === 'analyze') return json({ graph: { nodes: [{ id: 'n1', type: 'Project', label: '某项目' }], edges: [] }, knowledge_report: '# 风险报告', turtle: 'fixture turtle' });
+    if (action === 'analyze') return json({ graph: { nodes: ['Project', 'ProcurementItem', 'Qualification', 'ScoringCriterion', 'DisqualificationClause'].map((type, i) => ({ id: 'n' + i, type, label: '某脱敏节点' })), edges: [] }, knowledge_report: '# 风险报告\n' + numberedFixture, turtle: 'fixture turtle' });
   }
   const pages = { '/': 'index.html', '/fill': 'fill.html', '/templates': 'templates.html', '/projects': 'projects.html', '/company': 'company.html', '/settings': 'settings.html', '/compare': 'compare.html' };
   const relative = pages[url.pathname] || url.pathname.slice(1);
@@ -150,16 +156,91 @@ async function main() {
   async function go(route) { await send('Page.navigate', { url: base + route }); await waitDom(`document.querySelector('#vue-root')?.__vue_app__ && !document.querySelector('[v-cloak]')`); await sleep(80); }
   async function shot(name) { const image = await send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(path.join(OUT, name + '.png'), Buffer.from(image.data, 'base64')); }
   for (const domain of ['Page', 'Runtime', 'Network', 'Log']) await send(domain + '.enable');
+  // 无头窗口可能没有系统焦点；让页面按前台标签页处理焦点，才能验证真实 :focus 样式。
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true });
   await send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: OUT });
   await run('七个多页面路径与 .html 别名均可挂载 Vue', async () => {
     for (const route of ['/', '/fill', '/templates', '/projects', '/company', '/settings', '/compare', '/index.html', '/fill.html', '/templates.html', '/projects.html', '/company.html', '/settings.html', '/compare.html']) {
       await go(route); assert.equal(await evaluate(`document.querySelectorAll('.sidebar .sb-nav a').length`), 7);
     }
   });
+  // 跨页面测量实际几何位置，而不是只检查 CSS 字符串；同时覆盖长页滚动条、
+  // 桌面最大宽度、侧栏折叠断点以及新建 / 详情两个独立视图，防止切页时标题跳动。
+  for (const width of [1920, 1440, 1100, 800, 600]) {
+    await run(`${width}px 各页面 h1 起点、字号与内容区宽度一致`, async () => {
+      await send('Emulation.setDeviceMetricsOverride', { width, height: 1000, deviceScaleFactor: 1, mobile: false });
+      let reference;
+      for (const route of ['/', '/fill?job=job-one', '/templates', '/projects', '/company', '/settings', '/compare', '/?view=new', '/?job=job-one']) {
+        await go(route);
+        const layout = await evaluate(`(() => {
+          const main = document.querySelector('.main').getBoundingClientRect();
+          const inner = document.querySelector('.main-inner'), box = inner.getBoundingClientRect(), style = getComputedStyle(inner);
+          const headings = [...document.querySelectorAll('main h1')].filter(node => node.getClientRects().length);
+          const title = headings[0]?.getBoundingClientRect(), text = headings[0] && getComputedStyle(headings[0]);
+          return { headingCount: headings.length, x: title?.x, top: title && title.y - main.y, containerX: box.x, width: box.width,
+            contentX: box.x + parseFloat(style.paddingLeft), font: text?.fontSize,
+            overflow: document.documentElement.scrollWidth > innerWidth + 1 };
+        })()`);
+        // 新建解析按设计省略顶部 h1 与说明；其余页面继续检查统一标题起点。
+        const isNew = route === '/?view=new';
+        assert.equal(layout.headingCount, isNew ? 0 : 1, route + ' 页面主标题数量应符合设计');
+        assert.equal(layout.overflow, false, route + ' 不应出现整页横向溢出');
+        if (isNew) {
+          assert.equal(await evaluate(`document.querySelector('.page-head')`), null, '新建解析不应保留空页头或说明');
+          assert.ok(await evaluate(`document.querySelector('.hero-title') && document.querySelector('.hero-sub') && document.querySelector('#requirement-text')`), '新建引导与输入区仍应显示');
+        } else {
+          assert.ok(Math.abs(layout.x - layout.contentX) <= 1, route + ' 主标题应与内容左边界对齐');
+          assert.equal(layout.top, 24, route + ' 主标题距主区顶部应为 24px');
+          assert.equal(layout.font, width <= 760 ? '26px' : '32px', route + ' 主标题字号应一致');
+        }
+        assert.ok(layout.width <= 1180, route + ' 内容容器应限制最大宽度');
+        reference ??= layout;
+        for (const key of isNew ? ['containerX', 'width'] : ['x', 'containerX', 'width']) assert.ok(Math.abs(layout[key] - reference[key]) <= 1, `${route} ${key}: ${layout[key]}，基准 ${reference[key]}`);
+        // 留下宽屏 / 窄屏各页截图，便于核对标题对齐后的真实视觉效果。
+        if (width === 1440 || width === 600) await shot('layout-' + width + '-' + (route === '/' ? 'index' : route.includes('view=new') ? 'new' : route.startsWith('/?job') ? 'detail' : route.split('?')[0].slice(1)));
+      }
+    });
+  }
+  await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   await go('/fill?job=job-one');
   await run('未选齐类型时阻止填写与生成', async () => { await waitDom(`!document.getElementById('scopeGate').hidden`); assert.equal(await evaluate(`document.getElementById('btnGenerate').disabled`), true); });
+  // 展开菜单的真实选项和键盘均需可用，隐藏的原生 select 仅用于旧脚本兼容。
+  await run('采购类型下拉菜单匹配UI，键盘选择、焦点、外部关闭和禁用正常', async () => {
+    await waitDom(`document.querySelector('#scopeMethod option[value="open"]') && !document.querySelector('#scopeMethod').disabled`);
+    for (const selector of ['#scopeMethod-trigger', '#scopeCategory-trigger', '#scopeOrgForm-trigger']) {
+      assert.deepEqual(await evaluate(`(() => { const s = getComputedStyle(document.querySelector('${selector}')); return [s.borderRadius, s.minHeight]; })()`), ['8px', '36px']);
+    }
+    // 鼠标仍停在控件上时焦点色也应保留，不能被优先级更高的 hover 规则覆盖。
+    const position = await evaluate(`(() => { const r = document.querySelector('#scopeMethod-trigger').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...position });
+    await click('#scopeMethod-trigger');
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('#scopeMethod-trigger')).borderTopColor`), 'rgb(43, 95, 217)');
+    await shot('15-采购方式下拉菜单');
+    await evaluate(`document.querySelector('#scopeMethod-trigger').dispatchEvent(new KeyboardEvent('keydown', {key:'End', bubbles:true})); document.querySelector('#scopeMethod-trigger').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));`);
+    await waitDom(`document.querySelector('#scopeMethod').value === 'open'`);
+    await click('#scopeCategory-trigger'); await click('#scopeCategory-option-1');
+    await click('#scopeOrgForm-trigger');
+    await evaluate(`document.querySelector('h1').dispatchEvent(new PointerEvent('pointerdown', {bubbles:true}))`);
+    assert.equal(await evaluate(`document.querySelector('#scopeOrgForm-trigger').getAttribute('aria-expanded')`), 'false');
+    // 禁用态不靠降低整个控件透明度表达，文字仍可辨认，且不会因变灰改变宽度。
+    assert.deepEqual(await evaluate(`(() => { const e = document.querySelector('#scopeMethod-trigger'), before = e.getBoundingClientRect().width; e.disabled = true; const s = getComputedStyle(e); const state = [s.backgroundColor, e.getBoundingClientRect().width === before]; e.disabled = false; e.blur(); return state; })()`), ['rgb(246, 246, 243)', true]);
+  });
   for (const [id, value] of [['scopeMethod', 'open'], ['scopeCategory', 'service'], ['scopeOrgForm', 'self']]) await input('#' + id, value, 'change');
   await waitDom(`document.querySelectorAll('.field[data-key]').length === 2`);
+  await run('缺失字段与自定义字段下拉框保持一致且候选选择可保存', async () => {
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('#missingMode')).appearance`), 'none');
+    await click('#btnAddCustom'); await input('#cfLabel', '下拉样式回归'); await input('#cfType', 'select', 'change');
+    await input('#cfOptions', '候选一\n候选二');
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('#cfType')).appearance`), 'none');
+    await click('#cfSave'); await click('[data-g="custom"]'); await waitDom(`document.querySelector('.field.custom select')`);
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('.field.custom select')).appearance`), 'none');
+    await input('.field.custom select', '候选二', 'change');
+    await click('.field.custom [data-act="cf-edit"]');
+    await waitDom(`document.querySelector('#dlgCustom').open`);
+    assert.equal(await evaluate(`document.querySelector('#cfValue').value`), '候选二');
+    await click('#cfCancel'); await click('.field.custom [data-act="cf-del"]'); await click('#confirmOk');
+    await click('[data-g="general"]'); await shot('12-填写控件配色');
+  });
   await run('金额原样展示且字段跨分组编辑与清空均保留', async () => {
     assert.equal(await evaluate(`document.querySelector('[data-key="budget_amount"] [data-input]').value`), '123456789.1234');
     await input('[data-key="project_name"] [data-input]', '跨分组修改'); await click('[data-key="budget_amount"] [data-act="clear"]');
@@ -178,9 +259,18 @@ async function main() {
     await shot('01-填写预览');
   });
   await run('预览点击可跨分组定位字段', async () => {
-    await click('#paper [data-pname="项目名称"]'); await waitDom(`document.querySelector('[data-key="project_name"].flash')`);
+    // 原生 dialog 的 close 事件异步派发；等待该事件结束，才能开始下一次打开操作。
+    await evaluate(`new Promise(resolve => {
+      document.querySelector('#previewPane').addEventListener('close', () => resolve(true), { once: true });
+      document.querySelector('#paper [data-pname="项目名称"]').click();
+    })`);
+    await waitDom(`document.querySelector('[data-key="project_name"].flash')`);
+    await waitDom(`!document.querySelector('#previewPane').open`);
   });
   await run('并发预览丢弃旧响应，防抖后只显示最新值', async () => {
+    // 点击预览片段后弹窗会关闭以便填写；重新打开后再验证防抖与并发响应。
+    // 保留原有旧响应 / 最新值断言，避免因预览已关闭而等不到请求。
+    await click('#btnPreview'); await waitDom(`document.querySelector('#previewPane').open`);
     previewMode = 'race'; await input('[data-key="project_name"] [data-input]', '旧响应');
     const before = previewCalls; await waitFor(() => previewCalls > before, '旧预览请求');
     await input('[data-key="project_name"] [data-input]', '最新值'); await waitDom(`document.querySelector('#paper').innerText.includes('最新值')`); await sleep(700);
@@ -207,6 +297,21 @@ async function main() {
   await go('/settings'); await waitDom(`document.querySelector('#f-llm-model')`);
   await run('设置表单按原契约保存并保留密钥边界', async () => { await input('#f-llm-model', 'modified-local-model'); await click('#save'); await waitFor(() => lastSettings, '设置保存'); assert.equal(lastSettings.settings.llm.model, 'modified-local-model'); assert.equal('api_key' in lastSettings.settings.llm, false); });
   await go('/company'); await waitDom(`document.querySelector('[data-basic="name"]')`);
+  // 覆盖原先遗漏 type 的全部输入来源，动态新增行也必须获得相同的设计系统样式。
+  await run('企业档案基础、动态列表与材料输入框统一且窄屏不溢出', async () => {
+    await click('#add-q'); await click('#add-p'); await click('#add-r'); await click('#add-e');
+    for (const selector of ['#basic input', '#qualifications input', '#performances input', '#personnel input', '#evidence input']) {
+      assert.ok(await evaluate(`Array.from(document.querySelectorAll('${selector}')).every(e => { const s = getComputedStyle(e); return e.getAttribute('type') === 'text' && s.borderRadius === '8px' && s.minHeight === '36px' && s.backgroundColor === 'rgb(255, 255, 255)'; })`), selector);
+    }
+    await evaluate(`document.querySelector('[data-basic="name"]').focus()`); await sleep(180);
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('[data-basic="name"]')).borderTopColor`), 'rgb(43, 95, 217)');
+    await shot('13-企业档案统一输入框');
+    for (const width of [800, 390]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height: 1000, deviceScaleFactor: 1, mobile: false }); await sleep(100);
+      assert.ok(await evaluate(`document.documentElement.scrollWidth <= innerWidth + 1`), '企业档案 ' + width);
+    }
+    await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+  });
   await run('企业档案保留列表与未编辑的承诺字段', async () => { await input('[data-basic="name"]', '某企业'); await click('#add-q'); await waitDom(`document.querySelector('#qualifications [data-f="name"]')`); await input('#qualifications [data-f="name"]', '某证书'); await click('#save'); await waitFor(() => lastCompany, '档案保存'); assert.equal(lastCompany.company.name, '某企业'); assert.equal(lastCompany.qualifications[0].name, '某证书'); assert.equal(lastCompany.statements.service, '保留原有承诺'); });
   await go('/projects'); await waitDom(`document.querySelector('.pcard')`);
   await run('项目新建、详情与普通任务链接', async () => { await click('#new-project'); await input('#np-name', '某新项目'); await click('#np-create'); await waitDom(`document.querySelectorAll('.pcard').length === 2`); await click('.pcard'); await waitDom(`document.querySelector('#detail-jobs a')`); assert.equal(await evaluate(`document.querySelector('#detail-jobs a').getAttribute('href')`), '/fill.html?job=job-one'); });
@@ -291,6 +396,21 @@ async function main() {
     await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   });
   await go('/');
+  // 三种筛选语义与卡片、详情进度保持一致；来回切换真实夹具状态，避免只测 class 名。
+  await run('需求解析三色贯穿筛选、卡片与百分比进度', async () => {
+    for (const [state, filter, color] of [['running', 'running', 'rgb(43, 95, 217)'], ['done', 'done', 'rgb(47, 125, 91)'], ['error', 'error', 'rgb(178, 58, 44)'], ['skipped', 'error', 'rgb(178, 58, 44)']]) {
+      extractionState = state; await go('/'); await waitDom(`document.querySelector('#requirements-grid .tag')`);
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('#requirement-status [data-filter="${filter}"]')).color`), color);
+      await click('#requirement-status [data-filter="' + filter + '"]'); await sleep(180);
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('#requirement-status .active')).color`), color);
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('#requirements-grid .tag')).color`), color);
+      if (state === 'running') await shot('14-需求状态三色');
+      await go('/?job=job-one'); await waitDom(`document.querySelector('#status-percent')?.textContent === '${state === 'running' ? 35 : state === 'error' ? 65 : 100}%'`);
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.bar.determinate i')).backgroundColor`), color);
+      assert.equal(await evaluate(`getComputedStyle(document.querySelector('#status-percent')).color`), color);
+    }
+    extractionState = 'done'; await go('/');
+  });
   await run('需求标题、搜索计数和切换状态布局稳定', async () => {
     manyRequirements = true;
     for (const width of [1440, 1100, 800]) {
@@ -407,6 +527,88 @@ async function main() {
   await run('1440/1100/800 三档布局无横向溢出', async () => {
     await go('/fill?job=job-one'); await waitDom(`document.querySelector('.field')`);
     for (const width of [1440, 1100, 800]) { await send('Emulation.setDeviceMetricsOverride', { width, height: 1000, deviceScaleFactor: 1, mobile: false }); await sleep(100); assert.ok(await evaluate(`document.documentElement.scrollWidth <= innerWidth + 1`), String(width)); }
+  });
+  await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await run('重新检测在新建、详情和比对页随主按钮配色且无边框，仍会请求健康状态', async () => {
+    for (const route of ['/?view=new', '/?job=job-one', '/compare']) {
+      await go(route);
+      const before = requests.filter(item => item.path === '/api/health').length;
+      await click('#refresh-health');
+      await waitFor(() => requests.filter(item => item.path === '/api/health').length > before, '重新检测请求');
+      assert.deepEqual(await evaluate(`(() => { const s = getComputedStyle(document.querySelector('#refresh-health')); return [s.backgroundColor, s.color, s.borderTopWidth]; })()`), ['rgb(17, 17, 16)', 'rgb(255, 255, 255)', '0px']);
+    }
+  });
+  // 在真实页面切换主题，检查文字对比、跨页 / 刷新恢复及原生控件，避免只测 data 属性。
+  await run('深色模式覆盖七页及新建详情，持久化后刷新恢复且切换不改变布局', async () => {
+    await go('/?view=new');
+    const rects = () => evaluate(`['.main-inner', '.hero-title', '.composer'].map(selector => { const r = document.querySelector(selector).getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })`);
+    const before = await rects();
+    await click('#theme-toggle'); await waitDom(`document.documentElement.dataset.theme === 'dark'`);
+    assert.deepEqual(await rects(), before);
+    assert.equal(await evaluate(`localStorage.getItem('tender.theme')`), '"dark"');
+    for (const route of ['/', '/fill?job=job-one', '/templates', '/projects', '/company', '/settings', '/compare', '/?view=new', '/?job=job-one']) {
+      await go(route);
+      assert.deepEqual(await evaluate(`(() => {
+        const body = getComputedStyle(document.body), button = document.querySelector('#theme-toggle');
+        return [document.documentElement.dataset.theme, body.backgroundColor, body.color, getComputedStyle(document.documentElement).colorScheme, button.getAttribute('aria-pressed')];
+      })()`), ['dark', 'rgb(17, 17, 16)', 'rgb(237, 237, 235)', 'dark', 'true'], route);
+      // 正文与辅助文本应有足够对比；计算渲染后的 RGB 亮度，不靠类名推断。
+      assert.ok(await evaluate(`(() => {
+        const s = getComputedStyle(document.body), rgb = value => value.match(/\\d+/g).slice(0, 3).map(Number);
+        const luminance = value => rgb(value).map(n => { const c = n / 255; return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; }).reduce((sum, c, i) => sum + c * [.2126, .7152, .0722][i], 0);
+        const bg = luminance(s.backgroundColor), text = luminance(s.color);
+        return (text + .05) / (bg + .05) >= 4.5;
+      })()`), route + ' 正文对比度');
+      assert.equal(await evaluate(`document.documentElement.scrollWidth > innerWidth + 1`), false);
+      if (route === '/?view=new') {
+        await input('#requirement-text', '某采购需求');
+        assert.equal(await evaluate(`getComputedStyle(document.querySelector('.composer')).backgroundColor`), 'rgb(36, 36, 33)');
+        await evaluate(`document.querySelector('#requirement-text').focus()`); await sleep(200);
+        assert.equal(await evaluate(`getComputedStyle(document.querySelector('.composer')).backgroundColor`), 'rgb(44, 44, 40)');
+      }
+      if (['/company', '/settings'].includes(route)) assert.equal(await evaluate(`getComputedStyle(document.querySelector('main input[type="text"]')).backgroundColor`), 'rgb(25, 25, 24)');
+      // 深色时与其他主按钮一致使用浅底黑字，边框仍为零。
+      if (['/compare', '/?view=new', '/?job=job-one'].includes(route)) assert.deepEqual(await evaluate(`(() => { const s = getComputedStyle(document.querySelector('#refresh-health')); return [s.backgroundColor, s.color, s.borderTopWidth]; })()`), ['rgb(237, 237, 235)', 'rgb(17, 17, 16)', '0px']);
+      await shot('dark-' + (route === '/' ? 'index' : route.includes('view=new') ? 'new' : route.startsWith('/?job') ? 'detail' : route.split('?')[0].slice(1)));
+    }
+    await send('Page.reload'); await waitDom(`document.querySelector('#theme-toggle') && document.documentElement.dataset.theme === 'dark'`);
+    // 浏览器 storage 通知来自其他标签页；清除和修改偏好都应即时同步当前页面。
+    await evaluate(`localStorage.setItem('tender.theme', '"light"'); window.dispatchEvent(new StorageEvent('storage', { key: 'tender.theme' }));`);
+    await waitDom(`document.documentElement.dataset.theme === 'light'`);
+    await click('#theme-toggle'); await waitDom(`document.documentElement.dataset.theme === 'dark'`);
+  });
+  await run('深色弹窗、采购下拉和图谱可读，文档预览保持白纸黑字', async () => {
+    await go('/fill?job=job-one'); await waitDom(`document.querySelector('.field')`);
+    await click('#scopeMethod-trigger'); await waitDom(`document.querySelector('.ui-select-options')`);
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('.ui-select-options')).backgroundColor`), 'rgb(25, 25, 24)');
+    await shot('dark-select');
+    await evaluate(`document.querySelector('h1').dispatchEvent(new PointerEvent('pointerdown', {bubbles:true}))`);
+    await click('#btnPreview'); await waitDom(`document.querySelector('#previewPane').open && document.querySelector('#paper td')`);
+    assert.deepEqual(await evaluate(`(() => { const dialog = getComputedStyle(document.querySelector('#previewPane')), paper = getComputedStyle(document.querySelector('#paper')); return [dialog.backgroundColor, paper.backgroundColor, paper.color, paper.colorScheme]; })()`), ['rgb(25, 25, 24)', 'rgb(255, 255, 255)', 'rgb(17, 17, 17)', 'light']);
+    await shot('dark-document-preview');
+    await go('/?job=job-one'); await waitDom(`document.querySelector('#gen-risk')`); await click('#gen-risk'); await waitDom(`document.querySelector('#graph-svg rect')`);
+    assert.deepEqual(await evaluate(`(() => { const rect = getComputedStyle(document.querySelector('#graph-svg rect')), text = getComputedStyle(document.querySelector('#graph-svg rect + text')); return [rect.fill, text.fill]; })()`), ['rgb(25, 25, 24)', 'rgb(237, 237, 235)']);
+    await shot('dark-graph');
+    await click('#delete-requirement'); await waitDom(`document.querySelector('.delete-dialog').open`);
+    assert.deepEqual(await evaluate(`(() => { const s = getComputedStyle(document.querySelector('.delete-dialog')); return [s.backgroundColor, s.color]; })()`), ['rgb(25, 25, 24)', 'rgb(237, 237, 235)']);
+    await shot('dark-delete'); await click('[data-delete-cancel]');
+  });
+  await run('窄屏可切换主题，损坏或禁用存储时仍可使用页面', async () => {
+    await go('/?view=new');
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 900, deviceScaleFactor: 1, mobile: false });
+    assert.ok(await evaluate(`(() => { const r = document.querySelector('#theme-toggle').getBoundingClientRect(); return r.width > 0 && r.x >= 0 && r.right <= innerWidth; })()`));
+    await shot('dark-390-new'); await click('#theme-toggle'); await waitDom(`document.documentElement.dataset.theme === 'light'`);
+    await go('/settings'); assert.equal(await evaluate(`document.documentElement.dataset.theme`), 'light');
+    await evaluate(`localStorage.setItem('tender.theme', 'invalid-json')`); await go('/');
+    assert.equal(await evaluate(`document.documentElement.dataset.theme`), 'light');
+    // 通过浏览器注入拒绝存储的环境，验证初始化和点击均不会抛出未捕获异常。
+    const blocked = await send('Page.addScriptToEvaluateOnNewDocument', { source: `Storage.prototype.getItem = function() { throw new DOMException('Blocked', 'SecurityError'); }; Storage.prototype.setItem = function() { throw new DOMException('Blocked', 'SecurityError'); };` });
+    await go('/?view=new'); await click('#theme-toggle');
+    assert.equal(await evaluate(`document.documentElement.dataset.theme`), 'dark');
+    assert.ok(await evaluate(`document.querySelector('.sr-only').textContent.includes('存储不可用')`));
+    await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: blocked.identifier });
+    await go('/'); await evaluate(`localStorage.removeItem('tender.theme')`);
+    await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   });
   await run('没有外部资源请求、接口异常或浏览器未捕获错误', async () => {
     const external = events.filter(event => event.method === 'Network.requestWillBeSent').map(event => event.params.request.url).filter(url => !url.startsWith(base) && !/^(data|blob|about|chrome|devtools):/.test(url));

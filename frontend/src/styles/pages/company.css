@@ -1,47 +1,158 @@
+/* 本页专属：档案小节标题、自动填充字段网格、可增删的行卡片 */
+h2.sec {
+  /* 小节用蓝色短标记辅助定位，正文与卡片仍沿用黑白灰结构。 */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--ink);
+  margin: 26px 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line-soft);
+}
 
-  /* 本页专属：档案小节标题、自动填充字段网格、可增删的行卡片 */
-  h2.sec {
-    font-family: var(--font-serif);
-    font-size: 15px;
-    font-weight: 400;
-    color: var(--ink);
-    margin: 26px 0 10px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--line-soft);
+h2.sec:first-child {
+  margin-top: 0;
+}
+
+h2.sec::before {
+  content: "";
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--blue);
+  flex: none;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+  gap: 14px 16px;
+}
+
+.form-grid label {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.form-grid input {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.row-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.row-item {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 14px 64px 14px 14px;
+  background: var(--grey-25);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr));
+  gap: 12px;
+  align-items: end;
+  transition: border-color .15s, background-color .15s;
+}
+
+.row-item:hover {
+  border-color: var(--grey-300);
+  background: var(--card);
+}
+
+.row-item label {
+  color: var(--muted);
+  font-size: 11.5px;
+  display: block;
+}
+
+.row-item input {
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* 编辑时提示当前行；外环不占空间，避免聚焦造成表单抖动。 */
+.row-item:focus-within {
+  border-color: var(--blue-line);
+  background: var(--surface-2);
+}
+
+.company-page label {
+  min-width: 0;
+}
+
+.company-page label:focus-within {
+  color: var(--blue);
+}
+
+/* 删除放在卡片右上角，避免整行按钮把卡片撑高 */
+.row-item .del {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+}
+
+.kv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kv-item {
+  display: grid;
+  grid-template-columns: minmax(140px, 240px) minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.kv-item input {
+  width: 100%;
+  min-width: 0;
+}
+
+.kv-item input[data-k] {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+.kv-item .btn {
+  align-self: center;
+}
+
+.kv-item .btn.danger {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.ok-msg {
+  color: var(--green);
+  font-size: 13px;
+  display: none;
+}
+
+.ok-msg.show {
+  display: inline;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 0 0 10px;
+}
+
+/* 材料标识、说明与操作在窄屏各占一行，长占位文案也不能撑开页面。 */
+@media (max-width: 600px) {
+  .kv-item {
+    grid-template-columns: minmax(0, 1fr);
   }
-  h2.sec:first-child { margin-top: 0; }
 
-  .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
-  .form-grid label { display: block; color: var(--muted); font-size: 12px; }
-  .form-grid input { width: 100%; margin-top: 4px; }
-
-  .row-list { display: flex; flex-direction: column; gap: 8px; }
-  .row-item {
-    position: relative;
-    border: 1px solid var(--line);
-    border-radius: var(--r);
-    padding: 10px 12px;
-    padding-right: 64px;
-    background: var(--grey-25);
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-    gap: 8px;
-    align-items: end;
-    transition: border-color .15s, background-color .15s;
+  .kv-item .btn {
+    justify-self: end;
   }
-  .row-item:hover { border-color: var(--grey-300); background: #fff; }
-  .row-item label { color: var(--muted); font-size: 11.5px; display: block; }
-  .row-item input { width: 100%; margin-top: 3px; padding: 6px 9px; font-size: 12.5px; }
-  /* 删除放在卡片右上角，避免整行按钮把卡片撑高 */
-  .row-item .del { position: absolute; right: 10px; top: 10px; }
-
-  .kv-list { display: flex; flex-direction: column; gap: 8px; }
-  .kv-item { display: grid; grid-template-columns: minmax(140px, 240px) minmax(0, 1fr) auto; gap: 8px; }
-  .kv-item input { width: 100%; min-width: 0; padding: 6px 9px; font-size: 12.5px; }
-  .kv-item input[data-k] { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
-  .kv-item .btn { align-self: center; }
-  .kv-item .btn.danger { padding-left: 8px; padding-right: 8px; }
-
-  .ok-msg { color: var(--green); font-size: 13px; display: none; }
-  .ok-msg.show { display: inline; }
-  .hint { color: var(--muted); font-size: 12.5px; margin: 0 0 10px; }
+}
